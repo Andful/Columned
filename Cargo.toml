@@ -1,7 +1,14 @@
 [package]
 name = "columned"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
+readme = "README.md"
+keywords = ["unsafe", "alloc"]
+license = "MIT"
+categories = ["memory-management"]
+repository = "https://github.com/Andful/Columned"
+description = "A single, contiguous, allocation for multiple arrays"
+documentation = "https://docs.rs/columned"
 
 [dependencies]
 

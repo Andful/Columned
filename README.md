@@ -1,10 +1,26 @@
 # Columned
 
+[![Crates.io][crates-badge]][crates-url]
+[![Docs.rs][docs-badge]][docs-url]
+[![MIT licensed][mit-badge]][mit-url]
+
+[crates-url]: https://crates.io/crates/columned
+[crates-badge]: https://img.shields.io/crates/v/columned.svg
+[docs-url]: https://docs.rs/columned
+[docs-badge]: https://docs.rs/columned/badge.svg
+[mit-badge]: https://img.shields.io/badge/license-MIT-blue.svg
+[mit-url]: https://github.com/Andful/Columned/blob/master/LICENSE
+<!--[actions-badge]: https://github.com/tokio-rs/tokio/workflows/CI/badge.svg-->
+<!--[actions-url]: https://github.com/tokio-rs/tokio/actions?query=workflow%3ACI+branch%3Amaster-->
+
+
+[API Docs](https://docs.rs/tokio/latest/columned)
+
 A single, contiguous, allocation for multiple arrays, of type `Column<T>`.
 Meant to allocate multiple arrays, or so called `Column<T>` that live the same lifetimes.
 The lifetimes of a `Column<T>`, and its backing memory, is tied to a `Columned`.
 Therefore, the user must guarantee that `Columned` outlives any `Column<T>` which it allocated for.
-`Column<T>` originating from a single allocation may have of different sizes.  
+`Column<T>` originating from a single allocation may have different sizes.  
 This crate facilitates the implementation of columnar data structures.
 
 ## Example

@@ -6,7 +6,7 @@
 //! Meant to allocate multiple arrays, or so called `Column<T>` that live the same lifetimes.
 //! The lifetimes of a `Column<T>`, and its backing memory, is tied to a `Columned`.
 //! Therefore, the user must guarantee that `Columned` outlives any `Column<T>` which it allocated for.
-//! `Column<T>` originating from a single allocation may have of different sizes.  
+//! `Column<T>` originating from a single allocation may have different sizes.  
 //! This crate facilitates the implementation of columnar data structures.
 //!
 //! # Example
@@ -85,7 +85,7 @@ use std::{
 };
 
 /// A `Columned` instance, and its lifetime, corresponds to the allocation of a contiguous chunk of memory.
-/// An allocation starts when [Columned::new] (or [Columned::new_in]) is called, a finished when the object is dropped.
+/// An allocation starts when [Columned::new] (or [Columned::new_in]) is called, and finished when the object is dropped.
 pub struct Columned<A: Allocator = Global> {
     alloc: A,
     ptr: NonNull<u8>,
