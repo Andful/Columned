@@ -13,9 +13,6 @@
 <!--[actions-badge]: https://github.com/tokio-rs/tokio/workflows/CI/badge.svg-->
 <!--[actions-url]: https://github.com/tokio-rs/tokio/actions?query=workflow%3ACI+branch%3Amaster-->
 
-
-[API Docs](https://docs.rs/tokio/latest/columned)
-
 A single, contiguous, allocation for multiple arrays, of type `Column<T>`.
 Meant to allocate multiple arrays, or so called `Column<T>` that live the same lifetimes.
 The lifetimes of a `Column<T>`, and its backing memory, is tied to a `Columned`.

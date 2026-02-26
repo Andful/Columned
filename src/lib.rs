@@ -79,7 +79,7 @@ use std::{
     alloc::{Allocator, Global, Layout},
     fmt::Debug,
     marker::PhantomData,
-    mem::{ManuallyDrop, MaybeUninit},
+    mem::MaybeUninit,
     ops::{Deref, DerefMut},
     ptr::NonNull,
 };
@@ -222,18 +222,22 @@ where
 
 impl<E> Drop for Column<E> {
     fn drop(&mut self) {
-        #[cfg(feature = "asserts")]
-        {
-            assert!(
-                self.deallocated.get().is_none(),
-                "Underlying memory of Column has been deallocated"
-            );
-            assert!(self.init, "Underlying memory not initialized");
-        }
-        for e in
-            unsafe { std::slice::from_raw_parts_mut(self.ptr as *mut ManuallyDrop<E>, self.len) }
-        {
-            unsafe { ManuallyDrop::drop(e) };
+        if std::mem::needs_drop::<E>() {
+            #[cfg(feature = "asserts")]
+            {
+                assert!(
+                    self.deallocated.get().is_none(),
+                    "Underlying memory of Column has been deallocated. Therefore, cannot drop."
+                );
+                assert!(
+                    self.init,
+                    "Underlying memory not initialized. Therefore, cannot drop."
+                );
+            }
+            let ptr = self.ptr as *mut E;
+            for i in 0..self.len {
+                unsafe { std::ptr::drop_in_place(ptr.wrapping_add(i)) };
+            }
         }
     }
 }
@@ -328,19 +332,131 @@ where
 mod tests {
     use super::*;
     #[test]
-    fn tests() {
+    fn test_basic() {
+        let _columned; // Ensure this outlives the other variables.
+
+        let mut xs: Column<u64> = Default::default();
+        let mut ys: Column<u64> = Default::default();
+        let mut sums: Column<u64> = Default::default();
+
+        _columned = unsafe { Columned::new([xs.alloc(10), ys.alloc(10), sums.alloc(10)]) };
+
+        for (i, x) in xs.maybe_uninit().iter_mut().enumerate() {
+            x.write(i as u64);
+        }
+
+        for (i, y) in ys.maybe_uninit().iter_mut().enumerate() {
+            y.write(i as u64);
+        }
+
+        for sum in sums.maybe_uninit().iter_mut() {
+            sum.write(0);
+        }
+
+        for ((sum, x), y) in sums.iter_mut().zip(xs.iter()).zip(ys.iter()) {
+            *sum = x + y;
+        }
+
+        for (i, sum) in sums.iter().enumerate() {
+            assert_eq!(*sum, 2 * i as u64);
+        }
+    }
+
+    #[cfg(feature = "asserts")]
+    #[test]
+    #[should_panic]
+    fn test_use_after_free() {
+        let mut xs: Column<u64> = Default::default();
+        let mut ys: Column<u64> = Default::default();
+        let mut sums: Column<u64> = Default::default();
+
+        let _columned = unsafe { Columned::new([xs.alloc(10), ys.alloc(10), sums.alloc(10)]) };
+
+        for (i, x) in xs.maybe_uninit().iter_mut().enumerate() {
+            x.write(i as u64);
+        }
+
+        for (i, y) in ys.maybe_uninit().iter_mut().enumerate() {
+            y.write(i as u64);
+        }
+
+        for sum in sums.maybe_uninit().iter_mut() {
+            sum.write(0);
+        }
+
+        drop(_columned);
+
+        xs[0];
+    }
+
+    #[test]
+    fn test_no_drop_no_init() {
+        let mut xs: Column<u64> = Default::default();
+        let mut ys: Column<u64> = Default::default();
+        let mut sums: Column<u64> = Default::default();
+
+        let _columned = unsafe { Columned::new([xs.alloc(10), ys.alloc(10), sums.alloc(10)]) };
+
+        for (i, x) in xs.maybe_uninit().iter_mut().enumerate() {
+            x.write(i as u64);
+        }
+
+        for (i, y) in ys.maybe_uninit().iter_mut().enumerate() {
+            y.write(i as u64);
+        }
+
+        for sum in sums.maybe_uninit().iter_mut() {
+            sum.write(0);
+        }
+    }
+
+    #[cfg(feature = "asserts")]
+    #[test]
+    #[should_panic]
+    fn test_drop_no_init() {
+        struct WillDrop;
+        impl Drop for WillDrop {
+            fn drop(&mut self) {}
+        }
+
+        let mut xs: Column<WillDrop> = Default::default();
+
+        let _columned = unsafe { Columned::new([xs.alloc(10)]) };
+    }
+
+    #[cfg(feature = "asserts")]
+    #[test]
+    #[should_panic]
+    fn test_drop_with_init_but_wrong_order() {
+        struct WillDrop;
+        impl Drop for WillDrop {
+            fn drop(&mut self) {}
+        }
+
+        let mut xs: Column<WillDrop> = Default::default();
+
+        let _columned = unsafe { Columned::new([xs.alloc(10)]) };
+
+        for x in xs.maybe_uninit() {
+            x.write(WillDrop);
+        }
+    }
+
+    #[test]
+    fn test_drop_with_init_but_right_order() {
+        struct WillDrop;
+        impl Drop for WillDrop {
+            fn drop(&mut self) {}
+        }
+
         let _columned;
 
-        let mut x: Column<f64> = Default::default();
-        let mut y: Column<f64> = Default::default();
+        let mut xs: Column<WillDrop> = Default::default();
 
-        _columned = unsafe { Columned::new([x.alloc(10), y.alloc(10)]) };
+        _columned = unsafe { Columned::new([xs.alloc(10)]) };
 
-        x.maybe_uninit().iter_mut().for_each(|e| {
-            e.write(0.0);
-        });
-        y.maybe_uninit().iter_mut().for_each(|e| {
-            e.write(0.0);
-        });
+        for x in xs.maybe_uninit() {
+            x.write(WillDrop);
+        }
     }
 }
