@@ -1,4 +1,3 @@
-#![feature(iter_map_windows)]
 #![feature(allocator_api)]
 #![warn(missing_docs)]
 
@@ -92,6 +91,15 @@ pub struct Columned<A: Allocator = Global> {
     layout: Layout,
     #[cfg(feature = "asserts")]
     deallocated: std::sync::Arc<std::sync::OnceLock<()>>,
+}
+
+impl <A> Debug for Columned<A> where A: Allocator {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("Columned")
+            .field("ptr", &self.ptr)
+            .field("distances", &self.layout)
+            .finish()
+    }
 }
 
 impl Columned {
