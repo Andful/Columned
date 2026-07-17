@@ -7,6 +7,30 @@ use std::alloc::Global;
 
 use pastey::paste;
 
+pub enum Guard<A: core::alloc::Allocator = Global> {
+    Allocated {
+        ptr: core::ptr::NonNull<u8>,
+        alloc: A,
+        layout: core::alloc::Layout,
+    },
+    Unallocated,
+}
+
+impl<A: core::alloc::Allocator> Default for Guard<A> {
+    fn default() -> Self {
+        Self::Unallocated
+    }
+}
+
+impl<A: core::alloc::Allocator> Drop for Guard<A> {
+    fn drop(&mut self) {
+        match self {
+            Self::Allocated { ptr, alloc, layout } => unsafe { alloc.deallocate(*ptr, *layout) },
+            Self::Unallocated => (),
+        }
+    }
+}
+
 /// Prepare an allocation of a slice, by specifying its size and
 /// its initialization function.
 /// The initialization function will be called upon the call of
@@ -41,11 +65,11 @@ trait AllocateTuple {
     const ALIGNMENTS: &'static [usize];
     const INDICES: &'static [usize];
     type AllocatedArraysType<'a>;
-    fn with_allocation_in<R>(
+    fn allocate_in<'a, A: core::alloc::Allocator>(
         self,
-        alloc: impl ::core::alloc::Allocator,
-        f: impl FnOnce(Self::AllocatedArraysType<'_>) -> R,
-    ) -> Result<R, ::core::alloc::AllocError>;
+        guard: &'a mut Guard<A>,
+        alloc: A,
+    ) -> Result<Self::AllocatedArraysType<'a>, ::core::alloc::AllocError>;
 }
 
 macro_rules! one {
@@ -76,11 +100,15 @@ macro_rules! impl_allocate_tuple {
                 const INDICES: &'static [usize] = &const_arg_sort::<{ len!($($t),*) }>(Self::ALIGNMENTS);
                 type AllocatedArraysType<'a> = ($(&'a mut [[<T $t>]],)*);
 
-                fn with_allocation_in<R>(self, alloc: impl ::core::alloc::Allocator, f: impl FnOnce(Self::AllocatedArraysType<'_>) -> R) -> Result<R, ::core::alloc::AllocError> {
+                fn allocate_in<'a, A: ::core::alloc::Allocator>(self, guard: &'a mut Guard<A>, alloc: A) -> Result<Self::AllocatedArraysType<'a>, ::core::alloc::AllocError> {
                     const N: usize = len!($($t),*);
 
+                    if let Guard::Allocated { .. } = guard {
+                        return Err(::core::alloc::AllocError);
+                    }
+
                     if N == 0 {
-                        return Ok(f(($(&mut [] as &mut [[<T $t>]],)*)));
+                        return Ok(($(&mut [] as &mut [[<T $t>]],)*));
                     }
 
                     let align = Self::ALIGNMENTS[Self::INDICES[0]];
@@ -106,11 +134,12 @@ macro_rules! impl_allocate_tuple {
                     $(
                         ([<val_ $t>].init)([<uninit_ $t>]);
                     )*
-                    let result = f(($(unsafe{::core::mem::transmute::<&mut [std::mem::MaybeUninit<[<T $t>]>], &mut [[<T $t>]]>([<uninit_ $t>])},)*));
-                    unsafe {
-                        alloc.deallocate(ptr, layout);
-                    }
-                    Ok(result)
+                    *guard = Guard::Allocated {
+                        ptr,
+                        alloc,
+                        layout,
+                    };
+                    Ok(($(unsafe{::core::mem::transmute::<&mut [std::mem::MaybeUninit<[<T $t>]>], &mut [[<T $t>]]>([<uninit_ $t>])},)*))
                 }
             }
         }
@@ -182,7 +211,26 @@ pub fn with_allocation_in<ARG: AllocateTuple, R>(
     arg: ARG,
     f: impl FnOnce(ARG::AllocatedArraysType<'_>) -> R,
 ) -> Result<R, ::core::alloc::AllocError> {
-    arg.with_allocation_in(alloc, f)
+    let mut guard = Guard::default();
+    let arrays = arg.allocate_in(&mut guard, alloc)?;
+    Ok(f(arrays))
+}
+
+#[allow(private_bounds)]
+pub fn allocate_in<'a, ARG: AllocateTuple, A: ::core::alloc::Allocator>(
+    guard: &'a mut Guard<A>,
+    alloc: A,
+    arg: ARG,
+) -> Result<ARG::AllocatedArraysType<'a>, ::core::alloc::AllocError> {
+    arg.allocate_in(guard, alloc)
+}
+
+#[allow(private_bounds)]
+pub fn allocate<'a, ARG: AllocateTuple>(
+    guard: &'a mut Guard,
+    arg: ARG,
+) -> Result<ARG::AllocatedArraysType<'a>, ::core::alloc::AllocError> {
+    allocate_in(guard, Global, arg)
 }
 
 #[cfg(test)]
@@ -222,5 +270,42 @@ mod tests {
             }
         })
         .unwrap();
+    }
+
+    #[test]
+    fn test_basic2() {
+        let xs: Allocate<u64, _> = unsafe {
+            Allocate::alloc(10, |xs| {
+                for (i, x) in xs.iter_mut().enumerate() {
+                    x.write(i as u64);
+                }
+            })
+        };
+        let ys: Allocate<u64, _> = unsafe {
+            Allocate::alloc(10, |ys| {
+                for (i, y) in ys.iter_mut().enumerate() {
+                    y.write(i as u64);
+                }
+            })
+        };
+        let sums: Allocate<u64, _> = unsafe {
+            Allocate::alloc(10, |sums| {
+                for sum in sums.iter_mut() {
+                    sum.write(0);
+                }
+            })
+        };
+
+        let mut guard: Guard = Guard::default();
+
+        let (xs, ys, sums) = allocate(&mut guard, (xs, ys, sums)).unwrap();
+
+        for ((sum, x), y) in sums.iter_mut().zip(xs.iter()).zip(ys.iter()) {
+            *sum = x + y;
+        }
+
+        for (i, sum) in sums.iter().enumerate() {
+            assert_eq!(*sum, 2 * i as u64);
+        }
     }
 }
