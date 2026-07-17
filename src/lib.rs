@@ -1,339 +1,188 @@
 #![feature(allocator_api)]
 #![warn(missing_docs)]
+#![doc = include_str!("../README.md")]
 
-//! A single, contiguous, allocation for multiple arrays, of type `Column<T>`.
-//! Meant to allocate multiple arrays, or so called `Column<T>` that live the same lifetimes.
-//! The lifetimes of a `Column<T>`, and its backing memory, is tied to a `Columned`.
-//! Therefore, the user must guarantee that `Columned` outlives any `Column<T>` which it allocated for.
-//! `Column<T>` originating from a single allocation may have different sizes.  
-//! This crate facilitates the implementation of columnar data structures.
-//!
-//! # Example
-//!
-//! ```
-//! use columned::*;
-//!
-//! fn main() {
-//!     let _columned; // Ensure this outlives the other variables.
-//!
-//!     let mut xs: Column<f64> = Default::default();
-//!     let mut ys: Column<f64> = Default::default();
-//!     let mut sums: Column<f64> = Default::default();
-//!
-//!     _columned = unsafe {
-//!         Columned::new([
-//!             xs.alloc(10),
-//!             ys.alloc(10),
-//!             sums.alloc(10)
-//!         ])
-//!     };
-//!
-//!     for (i, x) in xs.maybe_uninit().iter_mut().enumerate() {
-//!         x.write(i as f64);
-//!     }
-//!
-//!     for (i, y) in ys.maybe_uninit().iter_mut().enumerate() {
-//!         y.write(i as f64);
-//!     }
-//!
-//!     for sum in sums.maybe_uninit().iter_mut() {
-//!         sum.write(0.0);
-//!     }
-//!
-//!     for ((sum,x),y) in sums.iter_mut().zip(xs.iter()).zip(ys.iter()) {
-//!         *sum = x + y;
-//!     }
-//!
-//!     println!("{:?}", sums);
-//! }
-//! ```
-//!
-//! # Working Principle
-//!
-//! `Columned` manages a contiguous allocation of memory. Each `Coulmn` have a pointer to the contiguous allocation. The following figure illustrates the working principle.
-//!
-//! ```text
-//!        Columned
-//!        +--------+--------+
-//!        | 0x0123 |   ...  |
-//!        +--------+--------+
-//!         ptr
-//!          |
-//!          V
-//! Heap   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
-//!        |           0.1 |           3.2 |     5 |     7 |    20 |     6 |
-//!        +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
-//!          ^                               ^
-//!          |                               |
-//!         ptr      len                    ptr      len
-//!        +--------+--------+             +--------+--------+
-//!        | 0x0123 |      2 |             | 0x012b |      4 |
-//!        +--------+--------+             +--------+--------+
-//!        Column<f32>                     Column<u16>
-//! ```
-//! This also means that the user has to ensure that `Columned`
-//! outlives the `Columns` that uses its managed memory.
+//Have to figure out how to handle no_std
+use std::alloc::Global;
 
-use std::{
-    alloc::{Allocator, Global, Layout},
-    fmt::Debug,
-    marker::PhantomData,
-    mem::MaybeUninit,
-    ops::{Deref, DerefMut},
-    ptr::NonNull,
-};
+use pastey::paste;
 
-/// A `Columned` instance, and its lifetime, corresponds to the allocation of a contiguous chunk of memory.
-/// An allocation starts when [Columned::new] (or [Columned::new_in]) is called, and finished when the object is dropped.
-pub struct Columned<A: Allocator = Global> {
-    alloc: A,
-    ptr: NonNull<u8>,
-    layout: Layout,
-    #[cfg(feature = "asserts")]
-    deallocated: std::sync::Arc<std::sync::OnceLock<()>>,
+/// Prepare an allocation of a slice, by specifying its size and
+/// its initialization function.
+/// The initialization function will be called upon the call of
+/// [with_allocation] or [with_allocation_in].
+pub struct Allocate<T, F>
+where
+    F: FnOnce(&mut [::core::mem::MaybeUninit<T>]),
+{
+    n: usize,
+    init: F,
+    pd: ::core::marker::PhantomData<T>,
 }
 
-impl <A> Debug for Columned<A> where A: Allocator {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("Columned")
-            .field("ptr", &self.ptr)
-            .field("distances", &self.layout)
-            .finish()
-    }
-}
-
-impl Columned {
+impl<T, F> Allocate<T, F>
+where
+    F: FnOnce(&mut [::core::mem::MaybeUninit<T>]),
+{
+    ///Prepare an allocation of a slice, by specifying its size and
+    /// its initialization function.
     /// # Safety
-    /// This is highly unsafe, due to the number of invariants. These invariants are checked at runtime with the feature `asserts`.
-    /// These invariants are:
-    /// * The elements of `columns` must be sorted from the element of greatest alignment to the lowest.
-    /// * After this call, each passed `Column<T>`, and their elements, must be initialized with the function [Column::maybe_uninit].
-    ///   The elements of a `Column<T>` must be initialized before `Column<T>` is treated like an array or is dropped.
-    /// * The resulting `Columned` must outlive the passed `Column<T>`.
-    pub unsafe fn new<const N: usize>(columns: [ColumnAlloc<'_>; N]) -> Self {
-        unsafe { Self::new_in(columns, Global) }
-    }
-
-    /// # Safety
-    /// This is highly unsafe, due to the number of invariants. These invariants are checked at runtime with the feature `asserts`.
-    /// These invariants are:
-    /// * The elements of `columns` must be sorted from the element of greatest alignment to the lowest.
-    /// * After this call, each passed `Column<T>`, and their elements, must be initialized with the function [Column::maybe_uninit].
-    ///   The elements of a `Column<T>` must be initialized before `Column<T>` is treated like an array or is dropped.
-    /// * The resulting `Columned` must outlive the passed `Column<T>`.
-    pub unsafe fn new_in<const N: usize, A: Allocator>(
-        mut columns: [ColumnAlloc<'_>; N],
-        alloc: A,
-    ) -> Columned<A> {
-        if columns.is_empty() {
-            return Columned {
-                alloc,
-                ptr: NonNull::dangling(),
-                layout: Layout::new::<()>(),
-                #[cfg(feature = "asserts")]
-                deallocated: std::sync::Arc::new(std::sync::OnceLock::new()),
-            };
-        }
-        #[cfg(feature = "asserts")]
-        for (i, cols) in columns.windows(2).enumerate() {
-            assert!(
-                cols[0].align >= cols[1].align,
-                "columns should be ordered by alignment, but align(columns[{}]) < align(columns[{}])",
-                i,
-                i + 1
-            )
-        }
-
-        let align = columns[0].align;
-        let size = columns.iter().map(|e| e.size * e.requested_len).sum();
-
-        let layout = Layout::from_size_align(size, align).unwrap();
-        let ptr: NonNull<u8> = alloc.allocate(layout).unwrap().cast();
-        let mut p = ptr.as_ptr();
-        #[cfg(feature = "asserts")]
-        let deallocated = std::sync::Arc::new(std::sync::OnceLock::new());
-        for e in columns.iter_mut() {
-            *(e.ptr) = p as *mut ();
-            *e.len = e.requested_len;
-            p = p.wrapping_add(e.size * e.requested_len);
-
-            #[cfg(feature = "asserts")]
-            {
-                *e.deallocated = deallocated.clone();
-                *e.init = false;
-            }
-        }
-        #[cfg(not(feature = "asserts"))]
-        {
-            Columned { alloc, ptr, layout }
-        }
-        #[cfg(feature = "asserts")]
-        Columned {
-            alloc,
-            ptr,
-            layout,
-            deallocated,
-        }
-    }
-}
-
-impl<A> Drop for Columned<A>
-where
-    A: Allocator,
-{
-    fn drop(&mut self) {
-        #[cfg(feature = "asserts")]
-        {
-            self.deallocated.get_or_init(|| ());
-        }
-
-        unsafe { self.alloc.deallocate(self.ptr, self.layout) };
-    }
-}
-
-/// Intermediate representation to allocate memory for `Column`.
-pub struct ColumnAlloc<'a> {
-    size: usize,
-    align: usize,
-    ptr: &'a mut *mut (),
-    len: &'a mut usize,
-    requested_len: usize,
-    #[cfg(feature = "asserts")]
-    deallocated: &'a mut std::sync::Arc<std::sync::OnceLock<()>>,
-    #[cfg(feature = "asserts")]
-    init: &'a mut bool,
-}
-
-/// Array like structure.
-pub struct Column<E>
-where
-    E: Sized,
-{
-    ptr: *mut (),
-    len: usize,
-    pd: PhantomData<E>,
-
-    #[cfg(feature = "asserts")]
-    deallocated: std::sync::Arc<std::sync::OnceLock<()>>,
-    #[cfg(feature = "asserts")]
-    init: bool,
-}
-
-impl<E> Debug for Column<E>
-where
-    E: Debug,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Debug::fmt(self.deref(), f)
-    }
-}
-
-impl<E> Drop for Column<E> {
-    fn drop(&mut self) {
-        if std::mem::needs_drop::<E>() {
-            #[cfg(feature = "asserts")]
-            {
-                assert!(
-                    self.deallocated.get().is_none(),
-                    "Underlying memory of Column has been deallocated. Therefore, cannot drop."
-                );
-                assert!(
-                    self.init,
-                    "Underlying memory not initialized. Therefore, cannot drop."
-                );
-            }
-            let ptr = self.ptr as *mut E;
-            for i in 0..self.len {
-                unsafe { std::ptr::drop_in_place(ptr.wrapping_add(i)) };
-            }
-        }
-    }
-}
-
-impl<E> Default for Column<E>
-where
-    E: Sized,
-{
-    fn default() -> Self {
+    /// the initialization function `init` must initialize every element of its argument.
+    pub unsafe fn alloc(n: usize, init: F) -> Self {
         Self {
-            ptr: std::ptr::dangling_mut::<E>() as *mut (),
-            len: 0,
+            n,
+            init,
             pd: Default::default(),
-            #[cfg(feature = "asserts")]
-            deallocated: std::sync::Arc::new(std::sync::OnceLock::new()),
-            #[cfg(feature = "asserts")]
-            init: true,
         }
     }
 }
 
-impl<E> Column<E>
-where
-    E: Sized,
-{
-    /// Constructs a new, empty Column<T>.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Function call to allocate memory. The parameter `len` dictates the length of the array after successful allocation.
-    pub fn alloc(&mut self, len: usize) -> ColumnAlloc<'_> {
-        ColumnAlloc {
-            size: core::mem::size_of::<E>(),
-            align: core::mem::align_of::<E>(),
-            ptr: &mut self.ptr,
-            len: &mut self.len,
-            requested_len: len,
-            #[cfg(feature = "asserts")]
-            deallocated: &mut self.deallocated,
-            #[cfg(feature = "asserts")]
-            init: &mut self.init,
-        }
-    }
-
-    /// Method used to initialized elements of the array. This method must be used, if the elements of the array are not initialized.
-    pub fn maybe_uninit(&mut self) -> &mut [MaybeUninit<E>] {
-        #[cfg(feature = "asserts")]
-        {
-            self.init = true;
-        }
-        unsafe { std::slice::from_raw_parts_mut(self.ptr as *mut MaybeUninit<E>, self.len) }
-    }
+trait AllocateTuple {
+    const ALIGNMENTS: &'static [usize];
+    const INDICES: &'static [usize];
+    type AllocatedArraysType<'a>;
+    fn with_allocation_in<R>(
+        self,
+        alloc: impl ::core::alloc::Allocator,
+        f: impl FnOnce(Self::AllocatedArraysType<'_>) -> R,
+    ) -> Result<R, ::core::alloc::AllocError>;
 }
 
-impl<E> Deref for Column<E>
-where
-    E: Sized,
-{
-    type Target = [E];
-    fn deref(&self) -> &Self::Target {
-        #[cfg(feature = "asserts")]
-        {
-            assert!(
-                self.deallocated.get().is_none(),
-                "Underlying memory of Column has been deallocated"
-            );
-            assert!(self.init, "Underlying memory not initialized");
-        }
-        unsafe { std::slice::from_raw_parts(self.ptr as *const E, self.len) }
-    }
+macro_rules! one {
+    ($x:ident) => {
+        1
+    };
 }
 
-impl<E> DerefMut for Column<E>
-where
-    E: Sized,
-{
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        #[cfg(feature = "asserts")]
-        {
-            assert!(
-                self.deallocated.get().is_none(),
-                "Underlying memory of Column has been deallocated"
-            );
-            assert!(self.init, "Underlying memory not initialized");
+macro_rules! len {
+    ($($xs:ident),*) => ($(one!($xs)+)* 0);
+}
+
+macro_rules! null_mut {
+    ($x:ident) => {
+        ::core::ptr::null_mut()
+    };
+}
+
+macro_rules! null_mut_array {
+    ($($xs:ident),*) => ([$(null_mut!($xs),)*]);
+}
+
+macro_rules! impl_allocate_tuple {
+    ($($t:ident),*) => {
+        paste!{
+            impl <$([<T $t>]: 'static, [<F $t>]: FnOnce(&mut [::core::mem::MaybeUninit<[<T $t>]>]),)*> AllocateTuple for ($(Allocate<[<T $t>], [<F $t>] >,)*) {
+                const ALIGNMENTS: &'static [usize] = &[$(::core::mem::align_of::<[<T $t>]>(),)*];
+                const INDICES: &'static [usize] = &const_arg_sort::<{ len!($($t),*) }>(Self::ALIGNMENTS);
+                type AllocatedArraysType<'a> = ($(&'a mut [[<T $t>]],)*);
+
+                fn with_allocation_in<R>(self, alloc: impl ::core::alloc::Allocator, f: impl FnOnce(Self::AllocatedArraysType<'_>) -> R) -> Result<R, ::core::alloc::AllocError> {
+                    const N: usize = len!($($t),*);
+
+                    if N == 0 {
+                        return Ok(f(($(&mut [] as &mut [[<T $t>]],)*)));
+                    }
+
+                    let align = Self::ALIGNMENTS[Self::INDICES[0]];
+                    let ($([<val_ $t>],)*) = self;
+                    let sizes: [usize; N] = [$(::core::mem::size_of::<[<T $t>]>()*[<val_ $t>].n,)*];
+                    let size: usize = sizes.iter().sum();
+
+                    let layout = ::core::alloc::Layout::from_size_align(size, align).unwrap();
+                    let ptr = alloc.allocate(layout)?.cast();
+
+                    let mut p = ptr.as_ptr();
+                    let mut pointers: [*mut u8; N]  = null_mut_array!($($t),*);
+
+                    #[allow(clippy::reversed_empty_ranges)]
+                    for i in 0..N {
+                        pointers[Self::INDICES[i]] = p;
+                        p = p.wrapping_add(sizes[Self::INDICES[i]]);
+                    }
+
+                    let [$([<ptr_ $t>],)*] = pointers;
+                    let ($([<uninit_ $t>],)*) = ($(unsafe { ::core::slice::from_raw_parts_mut([<ptr_ $t>] as *mut ::core::mem::MaybeUninit<[<T $t>]>, [<val_ $t>].n) },)*);
+
+                    $(
+                        ([<val_ $t>].init)([<uninit_ $t>]);
+                    )*
+                    let result = f(($(unsafe{::core::mem::transmute::<&mut [std::mem::MaybeUninit<[<T $t>]>], &mut [[<T $t>]]>([<uninit_ $t>])},)*));
+                    unsafe {
+                        alloc.deallocate(ptr, layout);
+                    }
+                    Ok(result)
+                }
+            }
         }
-        unsafe { std::slice::from_raw_parts_mut(self.ptr as *mut E, self.len) }
+    };
+}
+
+const fn const_arg_sort<const N: usize>(arr: &[usize]) -> [usize; N] {
+    //parts taken from: https://www.reddit.com/r/rust/comments/qw18oa/comment/hl05kuj/
+    let mut indices = [0usize; N];
+    let mut i = 0;
+    while i < indices.len() {
+        indices[i] = i;
+        i += 1;
     }
+    loop {
+        let mut swapped = false;
+        let mut i = 1;
+        while i < arr.len() {
+            if arr[indices[i - 1]] < arr[indices[i]] {
+                (indices[i - 1], indices[i]) = (indices[i], indices[i - 1]);
+                swapped = true;
+            }
+            i += 1;
+        }
+        if !swapped {
+            break;
+        }
+    }
+    indices
+}
+
+impl_allocate_tuple!();
+impl_allocate_tuple!(l1);
+impl_allocate_tuple!(l1, l2);
+impl_allocate_tuple!(l1, l2, l3);
+impl_allocate_tuple!(l1, l2, l3, l4);
+impl_allocate_tuple!(l1, l2, l3, l4, l5);
+impl_allocate_tuple!(l1, l2, l3, l4, l5, l6);
+impl_allocate_tuple!(l1, l2, l3, l4, l5, l6, l7);
+impl_allocate_tuple!(l1, l2, l3, l4, l5, l6, l7, l8);
+impl_allocate_tuple!(l1, l2, l3, l4, l5, l6, l7, l8, l9);
+impl_allocate_tuple!(l1, l2, l3, l4, l5, l6, l7, l8, l9, l10);
+impl_allocate_tuple!(l1, l2, l3, l4, l5, l6, l7, l8, l9, l10, l11);
+impl_allocate_tuple!(l1, l2, l3, l4, l5, l6, l7, l8, l9, l10, l11, l12);
+impl_allocate_tuple!(l1, l2, l3, l4, l5, l6, l7, l8, l9, l10, l11, l12, l13);
+impl_allocate_tuple!(l1, l2, l3, l4, l5, l6, l7, l8, l9, l10, l11, l12, l13, l14);
+impl_allocate_tuple!(
+    l1, l2, l3, l4, l5, l6, l7, l8, l9, l10, l11, l12, l13, l14, l15
+);
+impl_allocate_tuple!(
+    l1, l2, l3, l4, l5, l6, l7, l8, l9, l10, l11, l12, l13, l14, l15, l16
+);
+
+/// Allocate a single contiguous allocation to instantiate multiple slices.
+/// The slices will be used to call `f`.
+#[allow(private_bounds)]
+pub fn with_allocation<ARG: AllocateTuple, R>(
+    arg: ARG,
+    f: impl FnOnce(ARG::AllocatedArraysType<'_>) -> R,
+) -> Result<R, ::core::alloc::AllocError> {
+    with_allocation_in(Global, arg, f)
+}
+
+/// Allocate a single contiguous allocation to instantiate multiple slices.
+/// The slices will be used to call `f`. The allocation is done within the allocator `alloc`.
+#[allow(private_bounds)]
+pub fn with_allocation_in<ARG: AllocateTuple, R>(
+    alloc: impl ::core::alloc::Allocator,
+    arg: ARG,
+    f: impl FnOnce(ARG::AllocatedArraysType<'_>) -> R,
+) -> Result<R, ::core::alloc::AllocError> {
+    arg.with_allocation_in(alloc, f)
 }
 
 #[cfg(test)]
@@ -341,130 +190,37 @@ mod tests {
     use super::*;
     #[test]
     fn test_basic() {
-        let _columned; // Ensure this outlives the other variables.
+        let xs: Allocate<u64, _> = unsafe {
+            Allocate::alloc(10, |xs| {
+                for (i, x) in xs.iter_mut().enumerate() {
+                    x.write(i as u64);
+                }
+            })
+        };
+        let ys: Allocate<u64, _> = unsafe {
+            Allocate::alloc(10, |ys| {
+                for (i, y) in ys.iter_mut().enumerate() {
+                    y.write(i as u64);
+                }
+            })
+        };
+        let sums: Allocate<u64, _> = unsafe {
+            Allocate::alloc(10, |sums| {
+                for sum in sums.iter_mut() {
+                    sum.write(0);
+                }
+            })
+        };
 
-        let mut xs: Column<u64> = Default::default();
-        let mut ys: Column<u64> = Default::default();
-        let mut sums: Column<u64> = Default::default();
+        with_allocation((xs, ys, sums), |(xs, ys, sums)| {
+            for ((sum, x), y) in sums.iter_mut().zip(xs.iter()).zip(ys.iter()) {
+                *sum = x + y;
+            }
 
-        _columned = unsafe { Columned::new([xs.alloc(10), ys.alloc(10), sums.alloc(10)]) };
-
-        for (i, x) in xs.maybe_uninit().iter_mut().enumerate() {
-            x.write(i as u64);
-        }
-
-        for (i, y) in ys.maybe_uninit().iter_mut().enumerate() {
-            y.write(i as u64);
-        }
-
-        for sum in sums.maybe_uninit().iter_mut() {
-            sum.write(0);
-        }
-
-        for ((sum, x), y) in sums.iter_mut().zip(xs.iter()).zip(ys.iter()) {
-            *sum = x + y;
-        }
-
-        for (i, sum) in sums.iter().enumerate() {
-            assert_eq!(*sum, 2 * i as u64);
-        }
-    }
-
-    #[cfg(feature = "asserts")]
-    #[test]
-    #[should_panic]
-    fn test_use_after_free() {
-        let mut xs: Column<u64> = Default::default();
-        let mut ys: Column<u64> = Default::default();
-        let mut sums: Column<u64> = Default::default();
-
-        let _columned = unsafe { Columned::new([xs.alloc(10), ys.alloc(10), sums.alloc(10)]) };
-
-        for (i, x) in xs.maybe_uninit().iter_mut().enumerate() {
-            x.write(i as u64);
-        }
-
-        for (i, y) in ys.maybe_uninit().iter_mut().enumerate() {
-            y.write(i as u64);
-        }
-
-        for sum in sums.maybe_uninit().iter_mut() {
-            sum.write(0);
-        }
-
-        drop(_columned);
-
-        xs[0];
-    }
-
-    #[test]
-    fn test_no_drop_no_init() {
-        let mut xs: Column<u64> = Default::default();
-        let mut ys: Column<u64> = Default::default();
-        let mut sums: Column<u64> = Default::default();
-
-        let _columned = unsafe { Columned::new([xs.alloc(10), ys.alloc(10), sums.alloc(10)]) };
-
-        for (i, x) in xs.maybe_uninit().iter_mut().enumerate() {
-            x.write(i as u64);
-        }
-
-        for (i, y) in ys.maybe_uninit().iter_mut().enumerate() {
-            y.write(i as u64);
-        }
-
-        for sum in sums.maybe_uninit().iter_mut() {
-            sum.write(0);
-        }
-    }
-
-    #[cfg(feature = "asserts")]
-    #[test]
-    #[should_panic]
-    fn test_drop_no_init() {
-        struct WillDrop;
-        impl Drop for WillDrop {
-            fn drop(&mut self) {}
-        }
-
-        let mut xs: Column<WillDrop> = Default::default();
-
-        let _columned = unsafe { Columned::new([xs.alloc(10)]) };
-    }
-
-    #[cfg(feature = "asserts")]
-    #[test]
-    #[should_panic]
-    fn test_drop_with_init_but_wrong_order() {
-        struct WillDrop;
-        impl Drop for WillDrop {
-            fn drop(&mut self) {}
-        }
-
-        let mut xs: Column<WillDrop> = Default::default();
-
-        let _columned = unsafe { Columned::new([xs.alloc(10)]) };
-
-        for x in xs.maybe_uninit() {
-            x.write(WillDrop);
-        }
-    }
-
-    #[test]
-    fn test_drop_with_init_but_right_order() {
-        struct WillDrop;
-        impl Drop for WillDrop {
-            fn drop(&mut self) {}
-        }
-
-        let _columned;
-
-        let mut xs: Column<WillDrop> = Default::default();
-
-        _columned = unsafe { Columned::new([xs.alloc(10)]) };
-
-        for x in xs.maybe_uninit() {
-            x.write(WillDrop);
-        }
+            for (i, sum) in sums.iter().enumerate() {
+                assert_eq!(*sum, 2 * i as u64);
+            }
+        })
+        .unwrap();
     }
 }

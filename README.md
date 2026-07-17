@@ -13,50 +13,49 @@
 <!--[actions-badge]: https://github.com/tokio-rs/tokio/workflows/CI/badge.svg-->
 <!--[actions-url]: https://github.com/tokio-rs/tokio/actions?query=workflow%3ACI+branch%3Amaster-->
 
-A single, contiguous, allocation for multiple arrays, of type `Column<T>`.
-Meant to allocate multiple arrays, or so called `Column<T>` that live the same lifetimes.
-The lifetimes of a `Column<T>`, and its backing memory, is tied to a `Columned`.
-Therefore, the user must guarantee that `Columned` outlives any `Column<T>` which it allocated for.
-`Column<T>` originating from a single allocation may have different sizes.  
-This crate facilitates the implementation of columnar data structures.
+A single, contiguous, allocation for multiple arrays.
+Meant to allocate multiple arrays, that live the same lifetimes.
+This reduces multiple allocations, to a single one.
+This crate may facilitates the implementation of columnar data structures.
 
 ## Example
 
 ```rust
-use columned::*;
+use columned::{Allocate, with_allocation};
 
 fn main() {
-    let _columned; // Ensure this outlives the other variables.
-
-    let mut xs: Column<f64> = Default::default();
-    let mut ys: Column<f64> = Default::default();
-    let mut sums: Column<f64> = Default::default();
-
-    _columned = unsafe {
-        Columned::new([
-            xs.alloc(10),
-            ys.alloc(10),
-            sums.alloc(10)
-        ])
+    let xs: Allocate<u64, _> = unsafe {
+        Allocate::alloc(10, |xs| {
+            for (i, x) in xs.iter_mut().enumerate() {
+                x.write(i as u64);
+            }
+        })
+    };
+    let ys: Allocate<u64, _> = unsafe {
+        Allocate::alloc(10, |ys| {
+            for (i, y) in ys.iter_mut().enumerate() {
+                y.write(i as u64);
+            }
+        })
+    };
+    let sums: Allocate<u64, _> = unsafe {
+        Allocate::alloc(10, |sums| {
+            for sum in sums.iter_mut() {
+                sum.write(0);
+            }
+        })
     };
 
-    for (i, x) in xs.maybe_uninit().iter_mut().enumerate() {
-        x.write(i as f64);
-    }
+    with_allocation((xs, ys, sums), |(xs, ys, sums)| {
+        for ((sum, x), y) in sums.iter_mut().zip(xs.iter()).zip(ys.iter()) {
+            *sum = x + y;
+        }
 
-    for (i, y) in ys.maybe_uninit().iter_mut().enumerate() {
-        y.write(i as f64);
-    }
-
-    for sum in sums.maybe_uninit().iter_mut() {
-        sum.write(0.0);
-    }
-
-    for ((sum,x),y) in sums.iter_mut().zip(xs.iter()).zip(ys.iter()) {
-        *sum = x + y;
-    }
-
-    println!("{:?}", sums);
+        for (i, sum) in sums.iter().enumerate() {
+            assert_eq!(*sum, 2 * i as u64);
+        }
+    })
+    .unwrap();
 }
 ```
 
