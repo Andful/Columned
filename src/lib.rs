@@ -31,8 +31,10 @@ impl<A: core::alloc::Allocator> Default for Guard<A> {
 
 impl<A: core::alloc::Allocator> Guard<A> {
     /// Construct a new [Guard].
-    pub fn new() -> Self {
-        Self::default()
+    pub const fn new() -> Self {
+        Self {
+            state: GuardState::Unallocated,
+        }
     }
 }
 
