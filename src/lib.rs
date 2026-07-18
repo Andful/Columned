@@ -7,7 +7,7 @@ use std::alloc::Global;
 
 use pastey::paste;
 
-pub enum Guard<A: core::alloc::Allocator = Global> {
+enum GuardState<A: core::alloc::Allocator = Global> {
     Allocated {
         ptr: core::ptr::NonNull<u8>,
         alloc: A,
@@ -16,17 +16,33 @@ pub enum Guard<A: core::alloc::Allocator = Global> {
     Unallocated,
 }
 
+///`Guard` manages and owns a contiguous allocation of memory.
+pub struct Guard<A: core::alloc::Allocator = Global> {
+    state: GuardState<A>,
+}
+
 impl<A: core::alloc::Allocator> Default for Guard<A> {
     fn default() -> Self {
-        Self::Unallocated
+        Self {
+            state: GuardState::Unallocated,
+        }
+    }
+}
+
+impl<A: core::alloc::Allocator> Guard<A> {
+    /// Construct a new [Guard].
+    pub fn new() -> Self {
+        Self::default()
     }
 }
 
 impl<A: core::alloc::Allocator> Drop for Guard<A> {
     fn drop(&mut self) {
-        match self {
-            Self::Allocated { ptr, alloc, layout } => unsafe { alloc.deallocate(*ptr, *layout) },
-            Self::Unallocated => (),
+        match &self.state {
+            GuardState::Allocated { ptr, alloc, layout } => unsafe {
+                alloc.deallocate(*ptr, *layout)
+            },
+            GuardState::Unallocated => (),
         }
     }
 }
@@ -61,10 +77,18 @@ where
     }
 }
 
-trait AllocateTuple {
+trait Sealed {}
+
+/// Trait used internally to facilitate implementation. A user should not, and not be able to implement this trait.
+#[allow(private_bounds)]
+pub trait AllocateTuple: Sealed {
+    #[allow(missing_docs)]
     const ALIGNMENTS: &'static [usize];
+    #[allow(missing_docs)]
     const INDICES: &'static [usize];
+    #[allow(missing_docs)]
     type AllocatedArraysType<'a>;
+    #[allow(missing_docs)]
     fn allocate_in<'a, A: core::alloc::Allocator>(
         self,
         guard: &'a mut Guard<A>,
@@ -95,6 +119,8 @@ macro_rules! null_mut_array {
 macro_rules! impl_allocate_tuple {
     ($($t:ident),*) => {
         paste!{
+            impl <$([<T $t>], [<F $t>]: FnOnce(&mut [::core::mem::MaybeUninit<[<T $t>]>]),)*> Sealed for ($(Allocate<[<T $t>], [<F $t>] >,)*) {}
+
             impl <$([<T $t>]: 'static, [<F $t>]: FnOnce(&mut [::core::mem::MaybeUninit<[<T $t>]>]),)*> AllocateTuple for ($(Allocate<[<T $t>], [<F $t>] >,)*) {
                 const ALIGNMENTS: &'static [usize] = &[$(::core::mem::align_of::<[<T $t>]>(),)*];
                 const INDICES: &'static [usize] = &const_arg_sort::<{ len!($($t),*) }>(Self::ALIGNMENTS);
@@ -103,7 +129,7 @@ macro_rules! impl_allocate_tuple {
                 fn allocate_in<'a, A: ::core::alloc::Allocator>(self, guard: &'a mut Guard<A>, alloc: A) -> Result<Self::AllocatedArraysType<'a>, ::core::alloc::AllocError> {
                     const N: usize = len!($($t),*);
 
-                    if let Guard::Allocated { .. } = guard {
+                    if let GuardState::Allocated { .. } = guard.state {
                         return Err(::core::alloc::AllocError);
                     }
 
@@ -134,7 +160,7 @@ macro_rules! impl_allocate_tuple {
                     $(
                         ([<val_ $t>].init)([<uninit_ $t>]);
                     )*
-                    *guard = Guard::Allocated {
+                    guard.state = GuardState::Allocated {
                         ptr,
                         alloc,
                         layout,
@@ -147,6 +173,7 @@ macro_rules! impl_allocate_tuple {
 }
 
 const fn const_arg_sort<const N: usize>(arr: &[usize]) -> [usize; N] {
+    assert!(arr.len() == N);
     //parts taken from: https://www.reddit.com/r/rust/comments/qw18oa/comment/hl05kuj/
     let mut indices = [0usize; N];
     let mut i = 0;
@@ -216,7 +243,7 @@ pub fn with_allocation_in<ARG: AllocateTuple, R>(
     Ok(f(arrays))
 }
 
-#[allow(private_bounds)]
+///Allocate a single contiguous allocation to instantiate multiple slices. The allocation is done within the allocator `alloc`.
 pub fn allocate_in<'a, ARG: AllocateTuple, A: ::core::alloc::Allocator>(
     guard: &'a mut Guard<A>,
     alloc: A,
@@ -225,7 +252,7 @@ pub fn allocate_in<'a, ARG: AllocateTuple, A: ::core::alloc::Allocator>(
     arg.allocate_in(guard, alloc)
 }
 
-#[allow(private_bounds)]
+///Allocate a single contiguous allocation to instantiate multiple slices.
 pub fn allocate<'a, ARG: AllocateTuple>(
     guard: &'a mut Guard,
     arg: ARG,
@@ -307,5 +334,56 @@ mod tests {
         for (i, sum) in sums.iter().enumerate() {
             assert_eq!(*sum, 2 * i as u64);
         }
+    }
+
+    struct Vec3<'a> {
+        x: &'a mut [f32],
+        y: &'a mut [f32],
+        z: &'a mut [f32],
+    }
+
+    struct Bodies<'a> {
+        //Position
+        position: Vec3<'a>,
+        //Velocity
+        velocity: Vec3<'a>,
+        //Mass
+        mass: &'a mut [f32],
+    }
+
+    fn generate_n_bodies<'a>(n: usize, guard: &'a mut Guard) -> Bodies<'a> {
+        let init_to_zero = |data: &mut [std::mem::MaybeUninit<f32>]| {
+            data.iter_mut().for_each(|d| {
+                d.write(0.0);
+            })
+        };
+
+        let x = unsafe { Allocate::alloc(n, init_to_zero) };
+        let y = unsafe { Allocate::alloc(n, init_to_zero) };
+        let z = unsafe { Allocate::alloc(n, init_to_zero) };
+        let vx = unsafe { Allocate::alloc(n, init_to_zero) };
+        let vy = unsafe { Allocate::alloc(n, init_to_zero) };
+        let vz = unsafe { Allocate::alloc(n, init_to_zero) };
+        let mass = unsafe { Allocate::alloc(n, init_to_zero) };
+
+        let (x, y, z, vx, vy, vz, mass) = allocate(guard, (x, y, z, vx, vy, vz, mass)).unwrap();
+
+        Bodies {
+            position: Vec3 { x, y, z },
+            velocity: Vec3 {
+                x: vx,
+                y: vy,
+                z: vz,
+            },
+            mass,
+        }
+    }
+
+    #[test]
+    fn test3() {
+        let mut guard = Guard::new();
+        let bodies = generate_n_bodies(100, &mut guard);
+        //drop(guard);
+        println!("x: {:?}", &bodies.position.x);
     }
 }

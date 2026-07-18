@@ -1,6 +1,6 @@
 [package]
 name = "columned"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 readme = "README.md"
 keywords = ["unsafe", "alloc"]
@@ -11,5 +11,5 @@ description = "A single, contiguous, allocation for multiple arrays"
 documentation = "https://docs.rs/columned"
 
 [dependencies]
-pastey = "0.2.3"
+pastey = "0.2"
 
