@@ -3,7 +3,7 @@
 #![doc = include_str!("../README.md")]
 
 //Have to figure out how to handle no_std
-use std::{alloc::Global, fmt::Debug, mem::ManuallyDrop};
+use std::alloc::Global;
 
 use pastey::paste;
 
@@ -73,18 +73,18 @@ impl<T> Drop for GuardedSlice<'_, T> {
                 core::mem::transmute::<&mut [T], &mut [core::mem::ManuallyDrop<T>]>(to_drop)
             };
             to_drop.iter_mut().for_each(|e| unsafe {
-                ManuallyDrop::drop(e);
+                core::mem::ManuallyDrop::drop(e);
             });
         }
     }
 }
 
-impl<T> Debug for GuardedSlice<'_, T>
+impl<T> core::fmt::Debug for GuardedSlice<'_, T>
 where
-    T: Debug,
+    T: core::fmt::Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        Debug::fmt(self.0, f)
+        core::fmt::Debug::fmt(self.0, f)
     }
 }
 
