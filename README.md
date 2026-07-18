@@ -48,26 +48,26 @@ The lifetimes of the type system will ensure that the `Guard` will outlive any s
 # Examples
 ## Simple Example
 ```rust
-use columned::{Guard, Allocate, allocate};
+use columned::{Guard, PrepAlloc, allocate};
 
 fn main() {
     //Declare size and initialization of the slices.
-    let xs: Allocate<u64, _> = unsafe {
-        Allocate::alloc(10, |xs| {
+    let xs: PrepAlloc<u64, _> = unsafe {
+        PrepAlloc::new(10, |xs| {
             for (i, x) in xs.iter_mut().enumerate() {
                 x.write(i as u64);
             }
         })
     };
-    let ys: Allocate<u64, _> = unsafe {
-        Allocate::alloc(10, |ys| {
+    let ys: PrepAlloc<u64, _> = unsafe {
+        PrepAlloc::new(10, |ys| {
             for (i, y) in ys.iter_mut().enumerate() {
                 y.write(i as u64);
             }
         })
     };
-    let sums: Allocate<u64, _> = unsafe {
-        Allocate::alloc(10, |sums| {
+    let sums: PrepAlloc<u64, _> = unsafe {
+        PrepAlloc::new(10, |sums| {
             for sum in sums.iter_mut() {
                 sum.write(0);
             }
@@ -77,11 +77,11 @@ fn main() {
     //Initialize a "Guard", which will manage the allocation.
     let mut guard: Guard = Guard::default();
 
-    let (xs, ys, sums) = allocate(&mut guard, (xs, ys, sums)).unwrap();
+    let (xs, ys, mut sums) = allocate(&mut guard, (xs, ys, sums)).unwrap();
 
     //drop(guard); // This would cause a compilation error
 
-    for ((sum, x), y) in sums.iter_mut().zip(xs.iter()).zip(ys.iter()) {
+    for ((mut sum, x), y) in sums.iter_mut().zip(xs.iter()).zip(ys.iter()) {
         *sum = x + y;
     }
 
@@ -93,7 +93,7 @@ fn main() {
 ## Structure of Array Example
 ```rust
 use std::mem::MaybeUninit;
-use columned::{Guard, Allocate, allocate};
+use columned::{Guard, PrepAlloc, GuardedSlice, allocate};
 
 // The structure-of-array
 struct Bodies<'a> {
@@ -102,13 +102,13 @@ struct Bodies<'a> {
     //Velocity
     velocity: Vec3<'a>,
     //Mass
-    mass: &'a mut [f32],
+    mass: GuardedSlice<'a, f32>,
 }
 
 struct Vec3<'a> {
-    x: &'a mut [f32],
-    y: &'a mut [f32],
-    z: &'a mut [f32],
+    x: GuardedSlice<'a, f32>,
+    y: GuardedSlice<'a, f32>,
+    z: GuardedSlice<'a, f32>,
 }
 
 fn generate_n_bodies<'a>(n: usize, guard: &'a mut Guard) -> Bodies<'a> {
@@ -118,13 +118,13 @@ fn generate_n_bodies<'a>(n: usize, guard: &'a mut Guard) -> Bodies<'a> {
          })
     };
 
-    let x = unsafe { Allocate::alloc(n, init_to_zero) };
-    let y = unsafe { Allocate::alloc(n, init_to_zero) };
-    let z = unsafe { Allocate::alloc(n, init_to_zero) };
-    let vx = unsafe { Allocate::alloc(n, init_to_zero) };
-    let vy = unsafe { Allocate::alloc(n, init_to_zero) };
-    let vz = unsafe { Allocate::alloc(n, init_to_zero) };
-    let mass = unsafe { Allocate::alloc(n, init_to_zero) };
+    let x = unsafe { PrepAlloc::new(n, init_to_zero) };
+    let y = unsafe { PrepAlloc::new(n, init_to_zero) };
+    let z = unsafe { PrepAlloc::new(n, init_to_zero) };
+    let vx = unsafe { PrepAlloc::new(n, init_to_zero) };
+    let vy = unsafe { PrepAlloc::new(n, init_to_zero) };
+    let vz = unsafe { PrepAlloc::new(n, init_to_zero) };
+    let mass = unsafe { PrepAlloc::new(n, init_to_zero) };
 
     let (x, y, z, vx, vy, vz, mass) = allocate(guard, (x, y, z, vx, vy, vz, mass)).unwrap();
 
