@@ -50,7 +50,7 @@ impl<A: core::alloc::Allocator> Drop for Guard<A> {
 /// Prepare an allocation of a slice, by specifying its size and
 /// its initialization function.
 /// The initialization function will be called upon the call of
-/// [with_allocation] or [with_allocation_in].
+/// [allocate], [allocate_in], [with_allocation] or [with_allocation_in].
 pub struct Allocate<T, F>
 where
     F: FnOnce(&mut [::core::mem::MaybeUninit<T>]),
@@ -79,7 +79,7 @@ where
 
 trait Sealed {}
 
-/// Trait used internally to facilitate implementation. A user should not, and not be able to implement this trait.
+/// Trait used internally to facilitate implementation. An user should not, and should not be able to implement this trait.
 #[allow(private_bounds)]
 pub trait AllocateTuple: Sealed {
     #[allow(missing_docs)]
