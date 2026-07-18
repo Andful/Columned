@@ -148,9 +148,11 @@ where
             pd: Default::default(),
         }
     }
+}
 
+impl<T> PrepAlloc<core::mem::MaybeUninit<T>, NopInitializer<T>> {
     ///Prepare an allocation of a slice, by specifying only its size, but for which, its initialization is deferred to after allocation with [GuardedSlice::assume_init].
-    pub fn new_uninit<T2>(n: usize) -> PrepAlloc<core::mem::MaybeUninit<T2>, NopInitializer<T2>> {
+    pub fn new_uninit(n: usize) -> Self {
         unsafe { PrepAlloc::new(n, |_| ()) }
     }
 }

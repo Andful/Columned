@@ -48,6 +48,7 @@ The lifetimes of the type system will ensure that the `Guard` will outlive any s
 # Examples
 ## Simple Example
 ```rust
+use std::mem::MaybeUninit;
 use columned::{Guard, PrepAlloc, allocate};
 
 fn main() {
@@ -66,13 +67,7 @@ fn main() {
             }
         })
     };
-    let sums: PrepAlloc<u64, _> = unsafe {
-        PrepAlloc::new(10, |sums| {
-            for sum in sums.iter_mut() {
-                sum.write(0);
-            }
-        })
-    };
+    let sums = PrepAlloc::<MaybeUninit<u64>,_>::new_uninit(10);
 
     //Initialize a "Guard", which will manage the allocation.
     let mut guard: Guard = Guard::default();
@@ -82,8 +77,10 @@ fn main() {
     //drop(guard); // This would cause a compilation error
 
     for ((mut sum, x), y) in sums.iter_mut().zip(xs.iter()).zip(ys.iter()) {
-        *sum = x + y;
+        sum.write(x + y);
     }
+
+    let sums = unsafe { sums.assume_init() };
 
     for (i, sum) in sums.iter().enumerate() {
         assert_eq!(*sum, 2 * i as u64);
