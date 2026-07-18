@@ -280,7 +280,6 @@ impl_allocate_tuple!(
 
 /// Allocate a single contiguous allocation to instantiate multiple slices.
 /// The slices will be used to call `f`.
-#[allow(private_bounds)]
 pub fn with_allocation<ARG: for<'a> PrepAllocTuple<'a>, R>(
     arg: ARG,
     f: impl FnOnce(<ARG as PrepAllocTuple<'_>>::AllocatedArraysType) -> R,
@@ -290,7 +289,6 @@ pub fn with_allocation<ARG: for<'a> PrepAllocTuple<'a>, R>(
 
 /// Allocate a single contiguous allocation to instantiate multiple slices.
 /// The slices will be used to call `f`. The allocation is done within the allocator `alloc`.
-#[allow(private_bounds)]
 pub fn with_allocation_in<ARG: for<'a> PrepAllocTuple<'a>, R>(
     alloc: impl ::core::alloc::Allocator,
     arg: ARG,
