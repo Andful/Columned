@@ -41,7 +41,7 @@ Heap   +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
        +--------+--------+             +--------+--------+
        | 0x0123 |      2 |             | 0x012b |      4 |
        +--------+--------+             +--------+--------+
-       &mut [f32]                      &mut [u16]
+       GuardedSlice<f32>               GuardedSlice<u16>
 ```
 The lifetimes of the type system will ensure that the `Guard` will outlive any slice.
 
