@@ -126,13 +126,17 @@ pub trait PrepAllocTuple: Sealed {
     #[allow(missing_docs)]
     const INDICES: &'static [usize];
     #[allow(missing_docs)]
-    type AllocatedArraysType<'a>;
+    type AllocatedArraysType<'a>
+    where
+        Self: 'a;
     #[allow(missing_docs)]
     fn allocate_in<'a, A: core::alloc::Allocator>(
         self,
         guard: &'a mut Guard<A>,
         alloc: A,
-    ) -> Result<Self::AllocatedArraysType<'a>, ::core::alloc::AllocError>;
+    ) -> Result<Self::AllocatedArraysType<'a>, ::core::alloc::AllocError>
+    where
+        Self: 'a;
 }
 
 macro_rules! one {
@@ -160,12 +164,12 @@ macro_rules! impl_allocate_tuple {
         paste!{
             impl <$([<T $t>], [<F $t>]: FnOnce(&mut [::core::mem::MaybeUninit<[<T $t>]>]),)*> Sealed for ($(PrepAlloc<[<T $t>], [<F $t>] >,)*) {}
 
-            impl <$([<T $t>]: 'static, [<F $t>]: FnOnce(&mut [::core::mem::MaybeUninit<[<T $t>]>]),)*> PrepAllocTuple for ($(PrepAlloc<[<T $t>], [<F $t>] >,)*) {
+            impl <$([<T $t>], [<F $t>]: FnOnce(&mut [::core::mem::MaybeUninit<[<T $t>]>]),)*> PrepAllocTuple for ($(PrepAlloc<[<T $t>], [<F $t>] >,)*) {
                 const ALIGNMENTS: &'static [usize] = &[$(::core::mem::align_of::<[<T $t>]>(),)*];
                 const INDICES: &'static [usize] = &const_arg_sort::<{ len!($($t),*) }>(Self::ALIGNMENTS);
-                type AllocatedArraysType<'a> = ($(GuardedSlice<'a, [<T $t>]>,)*);
+                type AllocatedArraysType<'a> = ($(GuardedSlice<'a, [<T $t>]>,)*) where Self: 'a;
 
-                fn allocate_in<'a, A: ::core::alloc::Allocator>(self, guard: &'a mut Guard<A>, alloc: A) -> Result<Self::AllocatedArraysType<'a>, ::core::alloc::AllocError> {
+                fn allocate_in<'a, A: ::core::alloc::Allocator>(self, guard: &'a mut Guard<A>, alloc: A) -> Result<Self::AllocatedArraysType<'a>, ::core::alloc::AllocError> where Self: 'a {
                     const N: usize = len!($($t),*);
 
                     if let GuardState::Allocated { .. } = guard.state {
