@@ -52,6 +52,23 @@ impl<A: core::alloc::Allocator> Drop for Guard<A> {
 /// A slice, which memory is managed by a [Guard].
 pub struct GuardedSlice<'a, T>(&'a mut [T]);
 
+impl<'a, T> GuardedSlice<'a, T> {
+    ///Return the underling slice. This will cause [Drop::drop] of `T` to not be called.
+    pub fn forget(mut self) -> &'a mut [T] {
+        core::mem::take(&mut self.0)
+    }
+}
+
+impl<'a, T> GuardedSlice<'a, T>
+where
+    T: Copy,
+{
+    ///Return the underling slice. This is equivalent to [GuardedSlice::forget], but requires `T: Copy`. Therefore, it would lead to a compilation error if `Drop` is implemented for `T`.
+    pub fn into_slice(self) -> &'a mut [T] {
+        self.forget()
+    }
+}
+
 impl<T> core::ops::Deref for GuardedSlice<'_, T> {
     type Target = [T];
     fn deref(&self) -> &Self::Target {
