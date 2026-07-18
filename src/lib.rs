@@ -68,7 +68,7 @@ impl<T> core::ops::DerefMut for GuardedSlice<'_, T> {
 impl<T> Drop for GuardedSlice<'_, T> {
     fn drop(&mut self) {
         if core::mem::needs_drop::<T>() {
-            let to_drop = core::mem::replace(&mut self.0, &mut []);
+            let to_drop = core::mem::take(&mut self.0);
             let to_drop = unsafe {
                 core::mem::transmute::<&mut [T], &mut [core::mem::ManuallyDrop<T>]>(to_drop)
             };
@@ -122,23 +122,19 @@ trait Sealed {}
 
 /// Trait used internally to facilitate implementation. An user should not, and should not be able to implement this trait.
 #[allow(private_bounds)]
-pub trait PrepAllocTuple: Sealed {
+pub trait PrepAllocTuple<'a>: Sealed {
     #[allow(missing_docs)]
     const ALIGNMENTS: &'static [usize];
     #[allow(missing_docs)]
     const INDICES: &'static [usize];
     #[allow(missing_docs)]
-    type AllocatedArraysType<'a>
-    where
-        Self: 'a;
+    type AllocatedArraysType: 'a;
     #[allow(missing_docs)]
-    fn allocate_in<'a, A: core::alloc::Allocator>(
+    fn allocate_in<A: core::alloc::Allocator>(
         self,
         guard: &'a mut Guard<A>,
         alloc: A,
-    ) -> Result<Self::AllocatedArraysType<'a>, ::core::alloc::AllocError>
-    where
-        Self: 'a;
+    ) -> Result<Self::AllocatedArraysType, ::core::alloc::AllocError>;
 }
 
 macro_rules! one {
@@ -166,12 +162,12 @@ macro_rules! impl_allocate_tuple {
         paste!{
             impl <$([<T $t>], [<F $t>]: FnOnce(&mut [::core::mem::MaybeUninit<[<T $t>]>]),)*> Sealed for ($(PrepAlloc<[<T $t>], [<F $t>] >,)*) {}
 
-            impl <$([<T $t>], [<F $t>]: FnOnce(&mut [::core::mem::MaybeUninit<[<T $t>]>]),)*> PrepAllocTuple for ($(PrepAlloc<[<T $t>], [<F $t>] >,)*) {
+            impl <'a, $([<T $t>]: 'a, [<F $t>]: FnOnce(&mut [::core::mem::MaybeUninit<[<T $t>]>]),)*> PrepAllocTuple<'a> for ($(PrepAlloc<[<T $t>], [<F $t>] >,)*) {
                 const ALIGNMENTS: &'static [usize] = &[$(::core::mem::align_of::<[<T $t>]>(),)*];
                 const INDICES: &'static [usize] = &const_arg_sort::<{ len!($($t),*) }>(Self::ALIGNMENTS);
-                type AllocatedArraysType<'a> = ($(GuardedSlice<'a, [<T $t>]>,)*) where Self: 'a;
+                type AllocatedArraysType = ($(GuardedSlice<'a, [<T $t>]>,)*);
 
-                fn allocate_in<'a, A: ::core::alloc::Allocator>(self, guard: &'a mut Guard<A>, alloc: A) -> Result<Self::AllocatedArraysType<'a>, ::core::alloc::AllocError> where Self: 'a {
+                fn allocate_in<A: ::core::alloc::Allocator>(self, guard: &'a mut Guard<A>, alloc: A) -> Result<Self::AllocatedArraysType, ::core::alloc::AllocError> {
                     const N: usize = len!($($t),*);
 
                     if let GuardState::Allocated { .. } = guard.state {
@@ -268,9 +264,9 @@ impl_allocate_tuple!(
 /// Allocate a single contiguous allocation to instantiate multiple slices.
 /// The slices will be used to call `f`.
 #[allow(private_bounds)]
-pub fn with_allocation<ARG: PrepAllocTuple, R>(
+pub fn with_allocation<ARG: for<'a> PrepAllocTuple<'a>, R>(
     arg: ARG,
-    f: impl FnOnce(ARG::AllocatedArraysType<'_>) -> R,
+    f: impl FnOnce(<ARG as PrepAllocTuple<'_>>::AllocatedArraysType) -> R,
 ) -> Result<R, ::core::alloc::AllocError> {
     with_allocation_in(Global, arg, f)
 }
@@ -278,10 +274,10 @@ pub fn with_allocation<ARG: PrepAllocTuple, R>(
 /// Allocate a single contiguous allocation to instantiate multiple slices.
 /// The slices will be used to call `f`. The allocation is done within the allocator `alloc`.
 #[allow(private_bounds)]
-pub fn with_allocation_in<ARG: PrepAllocTuple, R>(
+pub fn with_allocation_in<ARG: for<'a> PrepAllocTuple<'a>, R>(
     alloc: impl ::core::alloc::Allocator,
     arg: ARG,
-    f: impl FnOnce(ARG::AllocatedArraysType<'_>) -> R,
+    f: impl FnOnce(<ARG as PrepAllocTuple<'_>>::AllocatedArraysType) -> R,
 ) -> Result<R, ::core::alloc::AllocError> {
     let mut guard = Guard::default();
     let arrays = arg.allocate_in(&mut guard, alloc)?;
@@ -289,19 +285,19 @@ pub fn with_allocation_in<ARG: PrepAllocTuple, R>(
 }
 
 ///Allocate a single contiguous allocation to instantiate multiple slices. The allocation is done within the allocator `alloc`.
-pub fn allocate_in<'a, ARG: PrepAllocTuple, A: ::core::alloc::Allocator>(
+pub fn allocate_in<'a, ARG: PrepAllocTuple<'a>, A: ::core::alloc::Allocator>(
     guard: &'a mut Guard<A>,
     alloc: A,
     arg: ARG,
-) -> Result<ARG::AllocatedArraysType<'a>, ::core::alloc::AllocError> {
+) -> Result<ARG::AllocatedArraysType, ::core::alloc::AllocError> {
     arg.allocate_in(guard, alloc)
 }
 
 ///Allocate a single contiguous allocation to instantiate multiple slices.
-pub fn allocate<'a, ARG: PrepAllocTuple>(
+pub fn allocate<'a, ARG: PrepAllocTuple<'a>>(
     guard: &'a mut Guard,
     arg: ARG,
-) -> Result<ARG::AllocatedArraysType<'a>, ::core::alloc::AllocError> {
+) -> Result<ARG::AllocatedArraysType, ::core::alloc::AllocError> {
     allocate_in(guard, Global, arg)
 }
 
