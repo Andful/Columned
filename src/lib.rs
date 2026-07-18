@@ -59,6 +59,19 @@ impl<'a, T> GuardedSlice<'a, T> {
     }
 }
 
+impl<'a, T> GuardedSlice<'a, core::mem::MaybeUninit<T>> {
+    ///Assume that the content of the slice are all initialized.
+    /// # Safety
+    /// All the elements of the slice must be initialized.
+    pub unsafe fn assume_init(mut self) -> GuardedSlice<'a, T> {
+        GuardedSlice(unsafe {
+            core::mem::transmute::<&'a mut [core::mem::MaybeUninit<T>], &'a mut [T]>(
+                core::mem::take(&mut self.0),
+            )
+        })
+    }
+}
+
 impl<'a, T> GuardedSlice<'a, T>
 where
     T: Copy,
@@ -105,6 +118,8 @@ where
     }
 }
 
+type NopInitializer<T> = fn(&mut [core::mem::MaybeUninit<core::mem::MaybeUninit<T>>]);
+
 /// Prepare an allocation of a slice, by specifying its size and
 /// its initialization function.
 /// The initialization function will be called upon the call of
@@ -132,6 +147,11 @@ where
             init,
             pd: Default::default(),
         }
+    }
+
+    ///Prepare an allocation of a slice, by specifying only its size, but for which, its initialization is deferred to after allocation with [GuardedSlice::assume_init].
+    pub fn new_uninit<T2>(n: usize) -> PrepAlloc<core::mem::MaybeUninit<T2>, NopInitializer<T2>> {
+        unsafe { PrepAlloc::new(n, |_| ()) }
     }
 }
 
