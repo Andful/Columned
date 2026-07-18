@@ -16,7 +16,7 @@ enum GuardState<A: core::alloc::Allocator = Global> {
     Unallocated,
 }
 
-///`Guard` manages and owns a contiguous allocation of memory.
+///`Guard` manages and owns a contiguous allocation of memory. A `Guard` should be used only once for [allocate], [allocate_in], otherwise the allocation will fail.
 pub struct Guard<A: core::alloc::Allocator = Global> {
     state: GuardState<A>,
 }
