@@ -21,7 +21,7 @@ mod tests {
     //Have to figure out how to handle no_std
     use core::mem::MaybeUninit;
 
-    use crate::{Guard, GuardedSliceBuilder};
+    use crate::{Guard, GuardedSliceBuilder, Subscriber};
 
     #[test]
     fn test() {
@@ -35,9 +35,9 @@ mod tests {
             })
         }
 
-        let mut x: GuardedSliceBuilder<u8, _> = unsafe { GuardedSliceBuilder::new(10, init_zero) };
-        let mut y: GuardedSliceBuilder<u32, _> = unsafe { GuardedSliceBuilder::new(10, init_zero) };
-        let mut z: GuardedSliceBuilder<u16, _> = unsafe { GuardedSliceBuilder::new(10, init_zero) };
+        let mut x: GuardedSliceBuilder<u8> = GuardedSliceBuilder::new(10);
+        let mut y: GuardedSliceBuilder<u32> = GuardedSliceBuilder::new(10);
+        let mut z: GuardedSliceBuilder<u16> = GuardedSliceBuilder::new(10);
 
         subscriber
             .subscribe(&mut x)
@@ -46,9 +46,9 @@ mod tests {
             .finish()
             .unwrap();
 
-        let x = x.build();
-        let y = y.build();
-        let z = z.build();
+        let x = unsafe { x.build(init_zero) };
+        let y = unsafe { y.build(init_zero) };
+        let z = unsafe { z.build(init_zero) };
 
         println!("1: {:?}", guard.as_ptr_range());
 

@@ -49,25 +49,13 @@ The lifetimes of the type system will ensure that the `Guard` will outlive any s
 ## Simple Example
 ```rust
 use std::mem::MaybeUninit;
-use columned::{Guard, PrepAlloc, allocate};
+use columned::{Guard, GuardedSliceBuilder};
 
 fn main() {
     //Declare size and initialization of the slices.
-    let xs: PrepAlloc<u64, _> = unsafe {
-        PrepAlloc::new(10, |xs| {
-            for (i, x) in xs.iter_mut().enumerate() {
-                x.write(i as u64);
-            }
-        })
-    };
-    let ys: PrepAlloc<u64, _> = unsafe {
-        PrepAlloc::new(10, |ys| {
-            for (i, y) in ys.iter_mut().enumerate() {
-                y.write(i as u64);
-            }
-        })
-    };
-    let sums = PrepAlloc::<MaybeUninit<u64>,_>::new_uninit(10);
+    let xs = GuardedSliceBuilder::new_with_fn(|i| i as u64);
+    let ys = GuardedSliceBuilder::new_with_fn(|i| i as u64);
+    let sums = GuardedSliceBuilder::<MaybeUninit<u64>,_>::new_uninit(10);
 
     //Initialize a "Guard", which will manage the allocation.
     let mut guard: Guard = Guard::default();

@@ -1,5 +1,5 @@
 use core::{
-    alloc::{Allocator, Layout},
+    alloc::{AllocError, Allocator, Layout},
     mem::MaybeUninit,
     ptr::NonNull,
 };
@@ -11,8 +11,19 @@ use crate::{
     chain::{Chain, ChainNode, MAX_CHAIN_LENGTH},
 };
 
+trait Sealed {}
+
 /// Struct used to "subscribe" multiple [GuardedSliceBuilder] for their [crate::GuardedSlice] to be allocated into a single contiguous allocation.
-pub struct Subscriber<'a, C, A = Global>
+#[allow(private_bounds)]
+pub trait Subscriber<'a>: Sealed {
+    ///To subscribe multiple [GuardedSliceBuilder] for their [crate::GuardedSlice] to be allocated into a single contiguous allocation.
+    fn subscribe<T>(self, gsb: &mut GuardedSliceBuilder<T>) -> impl Subscriber<'a>;
+
+    ///When all the [GuardedSliceBuilder] were [Self::subscribe]d, and the single contiguous allocation does occur.
+    fn finish(self) -> Result<(), AllocError>;
+}
+
+pub(crate) struct SubscriberImpl<'a, C, A = Global>
 where
     C: ChainNode,
     A: Allocator,
@@ -21,7 +32,7 @@ where
     chain: C,
 }
 
-impl<'a, A> Subscriber<'a, (), A>
+impl<'a, A> SubscriberImpl<'a, (), A>
 where
     A: Allocator,
 {
@@ -30,27 +41,31 @@ where
     }
 }
 
-impl<'a, C, A> Subscriber<'a, C, A>
+impl<'a, C, A> Sealed for SubscriberImpl<'a, C, A>
+where
+    C: ChainNode,
+    A: Allocator,
+{
+}
+
+impl<'a, C, A> Subscriber<'a> for SubscriberImpl<'a, C, A>
 where
     C: ChainNode,
     A: Allocator,
 {
     ///To subscribe multiple [GuardedSliceBuilder] for their [crate::GuardedSlice] to be allocated into a single contiguous allocation.
-    pub fn subscribe<T>(
-        self,
-        gsb: &mut GuardedSliceBuilder<T, impl FnOnce(&mut [MaybeUninit<T>])>,
-    ) -> Subscriber<'a, impl ChainNode, A>
+    fn subscribe<T>(self, gsb: &mut GuardedSliceBuilder<T>) -> impl Subscriber<'a>
     where
         A: Allocator,
     {
-        Subscriber {
+        SubscriberImpl {
             guard: self.guard,
             chain: Chain::new(gsb, self.chain),
         }
     }
 
     ///When all the [GuardedSliceBuilder] were [Self::subscribe]d, and the single contiguous allocation does occur.
-    pub fn finish(mut self) -> Result<(), core::alloc::AllocError> {
+    fn finish(mut self) -> Result<(), AllocError> {
         let n = C::INDEX.wrapping_add(1);
         let mut sizes = [MaybeUninit::uninit(); MAX_CHAIN_LENGTH];
 

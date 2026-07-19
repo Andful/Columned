@@ -32,38 +32,30 @@ const fn sorted_insert<const N: usize>(
     data
 }
 
-trait Sealed {}
-
-#[allow(private_bounds)]
-pub trait ChainNode: Sealed {
+pub(crate) trait ChainNode {
     const INDEX: usize;
     const MAX_ALIGNMENT: usize;
-    #[allow(private_interfaces)]
     const SORTED_INDICES_AND_SIZES: [IndexAndAlign; MAX_CHAIN_LENGTH]; //Fixed because I don't know how to make it "dynamic"
     fn distribute_pointers(&mut self, sizes: &[NonNull<u8>]);
     fn populate_sizes(&mut self, sizes: &mut [MaybeUninit<usize>]);
 }
 
-pub(crate) struct Chain<'a, 'b, A, F, B>
+pub(crate) struct Chain<'a, 'b, A, B>
 where
-    F: FnOnce(&mut [std::mem::MaybeUninit<A>]),
     B: ChainNode,
 {
-    gsb: &'a mut GuardedSliceBuilder<'b, A, F>,
+    gsb: &'a mut GuardedSliceBuilder<'b, A>,
     next: B,
 }
 
-impl<'a, 'b, A, F, B> Chain<'a, 'b, A, F, B>
+impl<'a, 'b, A, B> Chain<'a, 'b, A, B>
 where
-    F: FnOnce(&mut [std::mem::MaybeUninit<A>]),
     B: ChainNode,
 {
-    pub(crate) fn new(gsb: &'a mut GuardedSliceBuilder<'b, A, F>, next: B) -> Self {
+    pub(crate) fn new(gsb: &'a mut GuardedSliceBuilder<'b, A>, next: B) -> Self {
         Self { gsb, next }
     }
 }
-
-impl Sealed for () {}
 
 impl ChainNode for () {
     const INDEX: usize = usize::MAX;
@@ -77,16 +69,8 @@ impl ChainNode for () {
     fn populate_sizes(&mut self, _sizes: &mut [MaybeUninit<usize>]) {}
 }
 
-impl<A, F, B> Sealed for Chain<'_, '_, A, F, B>
+impl<A, B> ChainNode for Chain<'_, '_, A, B>
 where
-    F: FnOnce(&mut [std::mem::MaybeUninit<A>]),
-    B: ChainNode,
-{
-}
-
-impl<A, F, B> ChainNode for Chain<'_, '_, A, F, B>
-where
-    F: FnOnce(&mut [std::mem::MaybeUninit<A>]),
     B: ChainNode,
 {
     const INDEX: usize = B::INDEX.wrapping_add(1);

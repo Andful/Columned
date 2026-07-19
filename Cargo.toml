@@ -11,5 +11,8 @@ description = "A single, contiguous, allocation for multiple arrays"
 documentation = "https://docs.rs/columned"
 
 [dependencies]
-pastey = "0.2"
+
+[dev-dependencies]
+rand = "0.10.2"
+
 

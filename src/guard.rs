@@ -8,6 +8,7 @@ use core::{
 use std::alloc::Global;
 
 use crate::Subscriber;
+use crate::subscriber::SubscriberImpl;
 
 ///`Guard` manages and owns a contiguous allocation of memory. A `Guard` should be used only once for [allocate], [allocate_in], otherwise the allocation will fail.
 pub struct Guard<A: Allocator = Global> {
@@ -64,11 +65,11 @@ impl<A: Allocator> Guard<A> {
     }
 
     ///Construct a [Subscriber], for which multiple [crate::GuardedSliceBuilder] will [Subscriber::subscribe] to allocate a single contiguous allocation, wih the method [Subscriber::finish].
-    pub fn subscriber(&mut self) -> Subscriber<'_, (), A> {
+    pub fn subscriber(&mut self) -> impl Subscriber<'_> {
         if self.allocation.is_some() {
             panic!("This Guard has already been used for an allocation");
         }
-        Subscriber::new(self)
+        SubscriberImpl::new(self)
     }
 }
 
