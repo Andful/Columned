@@ -88,6 +88,31 @@ where
     pd: ::core::marker::PhantomData<&'a T>,
 }
 
+fn nop<T>(_: &mut [MaybeUninit<MaybeUninit<T>>]) {}
+
+impl<T> GuardedSliceBuilder<'_, MaybeUninit<T>, fn(&mut [MaybeUninit<MaybeUninit<T>>])> {
+    ///Prepare an allocation of a slice, by specifying only its size, but for which, its initialization is deferred to after allocation with [GuardedSlice::assume_init].
+    pub fn new_uninit(n: usize) -> Self {
+        unsafe { GuardedSliceBuilder::new(n, nop) }
+    }
+}
+
+fn write_default<T: Default>(e: &mut [MaybeUninit<T>]) {
+    e.iter_mut().for_each(|e| {
+        e.write(T::default());
+    });
+}
+
+impl<T> GuardedSliceBuilder<'_, T, fn(&mut [MaybeUninit<T>])>
+where
+    T: Default,
+{
+    ///Prepare an allocation of a slice, which its initial values will be [Default].
+    pub fn new_default(n: usize) -> Self {
+        unsafe { GuardedSliceBuilder::new(n, write_default) }
+    }
+}
+
 impl<'a, T, F> GuardedSliceBuilder<'a, T, F>
 where
     F: FnOnce(&mut [::core::mem::MaybeUninit<T>]),
@@ -103,15 +128,6 @@ where
             init,
             pd: Default::default(),
         }
-    }
-
-    ///Prepare an allocation of a slice, by specifying only its size, but for which, its initialization is deferred to after allocation with [GuardedSlice::assume_init].
-    #[allow(clippy::type_complexity)]
-    pub fn new_uninit<T1>(
-        n: usize,
-    ) -> GuardedSliceBuilder<'a, MaybeUninit<T1>, impl FnOnce(&mut [MaybeUninit<MaybeUninit<T1>>])>
-    {
-        unsafe { GuardedSliceBuilder::new(n, |_| ()) }
     }
 
     pub(crate) fn set_ptr(&mut self, ptr: NonNull<MaybeUninit<T>>) {
