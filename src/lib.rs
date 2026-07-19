@@ -8,12 +8,12 @@
 mod chain;
 mod guard;
 mod guarded_slice;
-mod once_allocator;
+mod single_allocation;
 mod subscriber;
 
 pub use guard::Guard;
 pub use guarded_slice::{GuardedSlice, GuardedSliceBuilder};
-pub use once_allocator::SingleAllocation;
+pub use single_allocation::SingleAllocation;
 pub use subscriber::Subscriber;
 
 #[cfg(test)]
