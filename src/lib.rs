@@ -11,7 +11,7 @@ mod single_allocation;
 mod subscriber;
 
 pub use guard::Guard;
-pub use guarded_slice::{GuardedSlice, GuardedSliceBuilder};
+pub use guarded_slice::{Guarded, GuardedBuilder};
 pub use single_allocation::SingleAllocation;
 pub use subscriber::Subscriber;
 
@@ -20,7 +20,7 @@ mod tests {
     //Have to figure out how to handle no_std
     use core::mem::MaybeUninit;
 
-    use crate::{Guard, GuardedSliceBuilder};
+    use crate::{Guard, GuardedBuilder};
 
     #[test]
     fn test() {
@@ -34,9 +34,9 @@ mod tests {
             })
         }
 
-        let mut x: GuardedSliceBuilder<u8> = GuardedSliceBuilder::new(10);
-        let mut y: GuardedSliceBuilder<u32> = GuardedSliceBuilder::new(10);
-        let mut z: GuardedSliceBuilder<u16> = GuardedSliceBuilder::new(10);
+        let mut x: GuardedBuilder<[u8]> = GuardedBuilder::new_slice(10);
+        let mut y: GuardedBuilder<[u32]> = GuardedBuilder::new_slice(10);
+        let mut z: GuardedBuilder<[u16]> = GuardedBuilder::new_slice(10);
 
         subscriber
             .subscribe(&mut x)

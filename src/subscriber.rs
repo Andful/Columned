@@ -2,15 +2,18 @@ use core::{
     alloc::{AllocError, Layout},
     ptr::NonNull,
 };
+use std::marker::PhantomCovariantLifetime;
 
-use crate::{GuardedSliceBuilder, guard::GuardTrait, guarded_slice::GuardedSliceBuilderInner};
+use crate::{GuardedBuilder, guard::GuardTrait, guarded_slice::GuardedBuilderInner};
 
 #[derive(Debug)]
 struct LinkedList<'builder> {
-    first: *mut GuardedSliceBuilderInner,
-    last: &'builder mut GuardedSliceBuilderInner,
+    first: *mut GuardedBuilderInner,
+    last: *mut GuardedBuilderInner,
+    pd: PhantomCovariantLifetime<'builder>,
 }
 
+/// Struct used to "subscribe" multiple [GuardedSliceBuilder] for their [crate::GuardedSlice] to be allocated into a single contiguous allocation.
 pub struct Subscriber<'guard, 'builder> {
     guard: &'guard mut dyn GuardTrait,
     align: usize,
@@ -29,19 +32,25 @@ impl<'guard, 'builder> Subscriber<'guard, 'builder> {
     }
 
     ///To subscribe multiple [GuardedSliceBuilder] for their [crate::GuardedSlice] to be allocated into a single contiguous allocation.
-    pub fn subscribe<T>(mut self, gsb: &'builder mut GuardedSliceBuilder<'guard, T>) -> Self {
-        let GuardedSliceBuilder { inner: node, .. } = gsb;
+    pub fn subscribe<T>(mut self, gsb: &'builder mut GuardedBuilder<'guard, T>) -> Self
+    where
+        T: ?Sized,
+    {
+        let GuardedBuilder { inner: node, .. } = gsb;
         self.size = self.size.div_ceil(node.align) * node.align;
         self.align = self.align.max(node.align);
-        self.size += node.n * node.size;
+        self.size += node.size;
 
         if let Some(linked_list) = &mut self.linked_list {
-            linked_list.last.next = Some(node);
+            unsafe {
+                (*linked_list.last).next = Some(node);
+            }
             linked_list.last = node;
         } else {
             self.linked_list = Some(LinkedList {
                 first: node,
                 last: node,
+                pd: Default::default(),
             })
         }
 
@@ -68,13 +77,15 @@ impl<'guard, 'builder> Subscriber<'guard, 'builder> {
 
         let mut it = Some(linked_list.first);
 
+        drop(linked_list); //drop linked_list.last which is a reference
+
         while let Some(node) = it {
             let node = unsafe { &mut *node };
             node.ptr = Some(NonNull::new(ptr).unwrap());
             it = node.next;
             ptr = ptr
                 .wrapping_add(ptr.align_offset(node.align))
-                .wrapping_add(node.size * node.n);
+                .wrapping_add(node.size);
         }
 
         Ok(())

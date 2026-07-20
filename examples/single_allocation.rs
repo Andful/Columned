@@ -1,4 +1,4 @@
-use columned::{Guard, GuardedSliceBuilder, SingleAllocation};
+use columned::{Guard, GuardedBuilder, SingleAllocation};
 use std::io::BufRead;
 use std::mem::MaybeUninit;
 
@@ -24,9 +24,9 @@ fn main() {
         };
         let mut guard = Guard::new_in(&allocator);
 
-        let mut x = GuardedSliceBuilder::<f64>::new(n);
-        let mut y = GuardedSliceBuilder::<f64>::new(n);
-        let mut z = GuardedSliceBuilder::<MaybeUninit<f64>>::new(n);
+        let mut x = GuardedBuilder::<[f64]>::new_slice(n);
+        let mut y = GuardedBuilder::<[f64]>::new_slice(n);
+        let mut z = GuardedBuilder::<[MaybeUninit<f64>]>::new_slice(n);
 
         guard
             .subscriber()

@@ -1,6 +1,6 @@
 #![feature(allocator_api)]
 
-use columned::{Guard, GuardedSliceBuilder, Subscriber};
+use columned::{Guard, GuardedBuilder, Subscriber};
 use std::alloc::AllocError;
 
 // The structure-of-array
@@ -24,9 +24,9 @@ impl<'a> Bodies<'a> {
 
         bodies.position = Vec3::new(n, subscriber, |subscriber| {
             bodies.velocity = Vec3::new(n, subscriber, |subscriber| {
-                let mut mass = GuardedSliceBuilder::new(n);
+                let mut mass = GuardedBuilder::new_slice(n);
                 f(subscriber.subscribe(&mut mass))?;
-                bodies.mass = mass.build_default().into_slice();
+                bodies.mass = mass.build_default().into_mut();
                 Ok(())
             })?;
             Ok(())
@@ -49,9 +49,9 @@ impl<'a> Vec3<'a> {
         subscriber: Subscriber<'a, '_>,
         f: impl FnOnce(Subscriber<'a, '_>) -> Result<(), AllocError>,
     ) -> Result<Vec3<'a>, AllocError> {
-        let mut x = GuardedSliceBuilder::new(n);
-        let mut y = GuardedSliceBuilder::new(n);
-        let mut z = GuardedSliceBuilder::new(n);
+        let mut x = GuardedBuilder::new_slice(n);
+        let mut y = GuardedBuilder::new_slice(n);
+        let mut z = GuardedBuilder::new_slice(n);
 
         let subscriber = subscriber
             .subscribe(&mut x)
@@ -61,9 +61,9 @@ impl<'a> Vec3<'a> {
         f(subscriber)?;
 
         Ok(Vec3 {
-            x: x.build_default().into_slice(),
-            y: y.build_default().into_slice(),
-            z: z.build_default().into_slice(),
+            x: x.build_default().into_mut(),
+            y: y.build_default().into_mut(),
+            z: z.build_default().into_mut(),
         })
     }
 }
