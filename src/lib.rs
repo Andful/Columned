@@ -2,6 +2,7 @@
 #![feature(slice_ptr_get)]
 #![feature(ptr_cast_slice)]
 #![feature(phantom_variance_markers)]
+#![feature(pointer_is_aligned_to)]
 #![warn(missing_docs)]
 #![doc = include_str!("../README.md")]
 

@@ -155,6 +155,7 @@ impl<'a, T> GuardedBuilder<'a, [T]> {
             );
         };
         let elem = ptr.as_ptr().cast::<MaybeUninit<T>>().cast_slice(n);
+        debug_assert!(elem.is_aligned_to(align_of::<T>()));
         let elem = unsafe { &mut *elem };
         init(elem);
         Guarded(unsafe { std::mem::transmute::<&mut [MaybeUninit<T>], &mut [T]>(elem) })

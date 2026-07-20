@@ -77,15 +77,12 @@ impl<'guard, 'builder> Subscriber<'guard, 'builder> {
 
         let mut it = Some(linked_list.first);
 
-        drop(linked_list); //drop linked_list.last which is a reference
-
         while let Some(node) = it {
             let node = unsafe { &mut *node };
+            ptr = ptr.wrapping_add(ptr.align_offset(node.align));
             node.ptr = Some(NonNull::new(ptr).unwrap());
             it = node.next;
-            ptr = ptr
-                .wrapping_add(ptr.align_offset(node.align))
-                .wrapping_add(node.size);
+            ptr = ptr.wrapping_add(node.size);
         }
 
         Ok(())
