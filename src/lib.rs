@@ -5,7 +5,6 @@
 #![warn(missing_docs)]
 #![doc = include_str!("../README.md")]
 
-mod chain;
 mod guard;
 mod guarded_slice;
 mod single_allocation;
@@ -21,7 +20,7 @@ mod tests {
     //Have to figure out how to handle no_std
     use core::mem::MaybeUninit;
 
-    use crate::{Guard, GuardedSliceBuilder, Subscriber};
+    use crate::{Guard, GuardedSliceBuilder};
 
     #[test]
     fn test() {
@@ -43,14 +42,12 @@ mod tests {
             .subscribe(&mut x)
             .subscribe(&mut y)
             .subscribe(&mut z)
-            .finish()
+            .allocate()
             .unwrap();
 
         let x = unsafe { x.build(init_zero) };
         let y = unsafe { y.build(init_zero) };
         let z = unsafe { z.build(init_zero) };
-
-        println!("1: {:?}", guard.as_ptr_range());
 
         println!(
             "ptrs2: {:?} {:?} {:?}",
@@ -59,6 +56,8 @@ mod tests {
             x.as_ptr_range()
         );
 
-        println!("{:?} {:?} {:?}", x, y, z)
+        println!("{:?} {:?} {:?}", x, y, z);
+
+        //println!("1: {:?}", guard.as_ptr_range());
     }
 }

@@ -72,20 +72,22 @@ where
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct GuardedSliceBuilderInner {
+    pub(crate) next: Option<*mut GuardedSliceBuilderInner>,
+    pub(crate) ptr: Option<NonNull<u8>>,
+    pub(crate) align: usize,
+    pub(crate) size: usize,
+    pub(crate) n: usize,
+}
+
 /// Prepare an allocation of a slice, by specifying its size and
 /// its initialization function.
 /// The initialization function will be called upon the call of
 /// [allocate], [allocate_in], [with_allocation] or [with_allocation_in].
-pub struct GuardedSliceBuilder<'a, T> {
-    ptr: Option<NonNull<MaybeUninit<T>>>,
-    n: usize,
-    pd: ::core::marker::PhantomData<&'a T>,
-}
-
-fn write_default<T: Default>(e: &mut [MaybeUninit<T>]) {
-    e.iter_mut().for_each(|e| {
-        e.write(T::default());
-    });
+pub struct GuardedSliceBuilder<'guard, T> {
+    pub(crate) inner: GuardedSliceBuilderInner,
+    pd: ::core::marker::PhantomData<&'guard T>,
 }
 
 impl<'a, T> GuardedSliceBuilder<'a, T> {
@@ -95,18 +97,15 @@ impl<'a, T> GuardedSliceBuilder<'a, T> {
     /// the initialization function `init` must initialize every element of its argument.
     pub fn new(n: usize) -> Self {
         Self {
-            ptr: None,
-            n,
+            inner: GuardedSliceBuilderInner {
+                next: None,
+                ptr: None,
+                align: align_of::<T>(),
+                size: size_of::<T>(),
+                n,
+            },
             pd: Default::default(),
         }
-    }
-
-    pub(crate) fn set_ptr(&mut self, ptr: NonNull<MaybeUninit<T>>) {
-        self.ptr = Some(ptr)
-    }
-
-    pub(crate) fn n(&self) -> usize {
-        self.n
     }
 
     ///Build a GuardedSlice.
@@ -114,15 +113,35 @@ impl<'a, T> GuardedSliceBuilder<'a, T> {
     /// Returning `Err` indicates that this [GuardedSliceBuilder] was not
     /// [Subscriber::subscribe]d and successfully [Subscriber::finish]ed.
     pub unsafe fn build(self, init: impl FnOnce(&mut [MaybeUninit<T>])) -> GuardedSlice<'a, T> {
-        let Self { ptr, n, pd } = self;
+        let Self {
+            inner: GuardedSliceBuilderInner { ptr, n, .. },
+            ..
+        } = self;
         let Some(ptr) = ptr else {
             panic!(
                 "Attempting to build GuardedSliceBuilder that was not subscribed and for which the Subscriber successfully finished"
             );
         };
-        let slice = slice_from_raw_parts_mut(ptr.as_ptr(), n);
+        let slice = slice_from_raw_parts_mut(ptr.as_ptr().cast::<MaybeUninit<T>>(), n);
         let slice = unsafe { &mut *slice };
         init(slice);
         GuardedSlice(unsafe { std::mem::transmute::<&mut [MaybeUninit<T>], &mut [T]>(slice) })
+    }
+
+    pub fn build_from_fn(self, mut f: impl FnMut(usize) -> T) -> GuardedSlice<'a, T> {
+        unsafe {
+            self.build(|slice| {
+                slice.iter_mut().enumerate().for_each(|(i, e)| {
+                    e.write(f(i));
+                })
+            })
+        }
+    }
+
+    pub fn build_default(self) -> GuardedSlice<'a, T>
+    where
+        T: Default,
+    {
+        self.build_from_fn(|_| T::default())
     }
 }

@@ -8,12 +8,23 @@ use core::{
 use std::alloc::Global;
 
 use crate::Subscriber;
-use crate::subscriber::SubscriberImpl;
 
 ///`Guard` manages and owns a contiguous allocation of memory. A `Guard` should be used only once for [allocate], [allocate_in], otherwise the allocation will fail.
 pub struct Guard<A: Allocator = Global> {
     allocator: A,
     allocation: Option<(NonNull<[u8]>, Layout)>,
+}
+
+pub(crate) trait GuardTrait {
+    unsafe fn allocate(&mut self, layout: Layout) -> Result<NonNull<[u8]>, AllocError>;
+}
+
+impl<A: Allocator> GuardTrait for Guard<A> {
+    unsafe fn allocate(&mut self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        let ptr = self.allocator.allocate(layout)?;
+        self.allocation = Some((ptr, layout));
+        Ok(ptr)
+    }
 }
 
 impl Default for Guard {
@@ -58,18 +69,12 @@ impl<A: Allocator> Guard<A> {
         }
     }
 
-    pub(crate) unsafe fn allocate(&mut self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        let ptr = self.allocator.allocate(layout)?;
-        self.allocation = Some((ptr, layout));
-        Ok(ptr)
-    }
-
     ///Construct a [Subscriber], for which multiple [crate::GuardedSliceBuilder] will [Subscriber::subscribe] to allocate a single contiguous allocation, wih the method [Subscriber::finish].
-    pub fn subscriber(&mut self) -> impl Subscriber<'_> {
+    pub fn subscriber(&mut self) -> Subscriber<'_, '_> {
         if self.allocation.is_some() {
             panic!("This Guard has already been used for an allocation");
         }
-        SubscriberImpl::new(self)
+        Subscriber::new(self)
     }
 }
 

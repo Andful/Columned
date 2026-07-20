@@ -1,98 +1,81 @@
 use core::{
-    alloc::{AllocError, Allocator, Layout},
-    mem::MaybeUninit,
+    alloc::{AllocError, Layout},
     ptr::NonNull,
 };
 
-use std::alloc::Global;
+use crate::{GuardedSliceBuilder, guard::GuardTrait, guarded_slice::GuardedSliceBuilderInner};
 
-use crate::{
-    Guard, GuardedSliceBuilder,
-    chain::{Chain, ChainNode, MAX_CHAIN_LENGTH},
-};
-
-trait Sealed {}
-
-/// Struct used to "subscribe" multiple [GuardedSliceBuilder] for their [crate::GuardedSlice] to be allocated into a single contiguous allocation.
-#[allow(private_bounds)]
-pub trait Subscriber<'a>: Sealed {
-    ///To subscribe multiple [GuardedSliceBuilder] for their [crate::GuardedSlice] to be allocated into a single contiguous allocation.
-    fn subscribe<T>(self, gsb: &mut GuardedSliceBuilder<T>) -> impl Subscriber<'a>;
-
-    ///When all the [GuardedSliceBuilder] were [Self::subscribe]d, and the single contiguous allocation does occur.
-    fn finish(self) -> Result<(), AllocError>;
+#[derive(Debug)]
+struct LinkedList<'builder> {
+    first: *mut GuardedSliceBuilderInner,
+    last: &'builder mut GuardedSliceBuilderInner,
 }
 
-pub(crate) struct SubscriberImpl<'a, C, A = Global>
-where
-    C: ChainNode,
-    A: Allocator,
-{
-    guard: &'a mut Guard<A>,
-    chain: C,
+pub struct Subscriber<'guard, 'builder> {
+    guard: &'guard mut dyn GuardTrait,
+    align: usize,
+    size: usize,
+    linked_list: Option<LinkedList<'builder>>,
 }
 
-impl<'a, A> SubscriberImpl<'a, (), A>
-where
-    A: Allocator,
-{
-    pub(crate) fn new(guard: &'a mut Guard<A>) -> Self {
-        Self { guard, chain: () }
-    }
-}
-
-impl<'a, C, A> Sealed for SubscriberImpl<'a, C, A>
-where
-    C: ChainNode,
-    A: Allocator,
-{
-}
-
-impl<'a, C, A> Subscriber<'a> for SubscriberImpl<'a, C, A>
-where
-    C: ChainNode,
-    A: Allocator,
-{
-    ///To subscribe multiple [GuardedSliceBuilder] for their [crate::GuardedSlice] to be allocated into a single contiguous allocation.
-    fn subscribe<T>(self, gsb: &mut GuardedSliceBuilder<T>) -> impl Subscriber<'a>
-    where
-        A: Allocator,
-    {
-        SubscriberImpl {
-            guard: self.guard,
-            chain: Chain::new(gsb, self.chain),
+impl<'guard, 'builder> Subscriber<'guard, 'builder> {
+    pub(crate) fn new(guard: &'guard mut impl GuardTrait) -> Self {
+        Self {
+            guard,
+            align: 1,
+            size: 0,
+            linked_list: None,
         }
     }
 
+    ///To subscribe multiple [GuardedSliceBuilder] for their [crate::GuardedSlice] to be allocated into a single contiguous allocation.
+    pub fn subscribe<T>(mut self, gsb: &'builder mut GuardedSliceBuilder<'guard, T>) -> Self {
+        let GuardedSliceBuilder { inner: node, .. } = gsb;
+        self.size = self.size.div_ceil(node.align) * node.align;
+        self.align = self.align.max(node.align);
+        self.size += node.n * node.size;
+
+        if let Some(linked_list) = &mut self.linked_list {
+            linked_list.last.next = Some(node);
+            linked_list.last = node;
+        } else {
+            self.linked_list = Some(LinkedList {
+                first: node,
+                last: node,
+            })
+        }
+
+        self
+    }
+
     ///When all the [GuardedSliceBuilder] were [Self::subscribe]d, and the single contiguous allocation does occur.
-    fn finish(mut self) -> Result<(), AllocError> {
-        let n = C::INDEX.wrapping_add(1);
-        let mut sizes = [MaybeUninit::uninit(); MAX_CHAIN_LENGTH];
-
-        self.chain.populate_sizes(&mut sizes);
-
-        let sizes = unsafe {
-            std::mem::transmute::<&mut [MaybeUninit<usize>], &mut [usize]>(&mut sizes[..n])
+    pub fn allocate(self) -> Result<(), AllocError> {
+        let Self {
+            guard,
+            align,
+            size,
+            linked_list,
+        } = self;
+        let Some(linked_list) = linked_list else {
+            return Ok(());
         };
-        let align = C::MAX_ALIGNMENT;
-
-        let size = sizes.iter().map(Clone::clone).sum();
-
         let layout = Layout::from_size_align(size, align).unwrap();
 
-        let ptr = unsafe { self.guard.allocate(layout)? };
+        let ptr = unsafe { guard.allocate(layout)? };
 
-        let mut ptr: NonNull<u8> = ptr.cast();
+        let ptr: NonNull<u8> = ptr.cast();
+        let mut ptr = ptr.as_ptr();
 
-        let mut ptrs = [NonNull::dangling(); MAX_CHAIN_LENGTH];
+        let mut it = Some(linked_list.first);
 
-        for i in 0..n {
-            let index = C::SORTED_INDICES_AND_SIZES[i].index;
-            ptrs[index] = ptr;
-            unsafe { ptr = ptr.add(sizes[index]) };
+        while let Some(node) = it {
+            let node = unsafe { &mut *node };
+            node.ptr = Some(NonNull::new(ptr).unwrap());
+            it = node.next;
+            ptr = ptr
+                .wrapping_add(ptr.align_offset(node.align))
+                .wrapping_add(node.size * node.n);
         }
-
-        self.chain.distribute_pointers(&ptrs);
 
         Ok(())
     }

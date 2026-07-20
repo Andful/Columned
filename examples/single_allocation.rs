@@ -34,7 +34,7 @@ fn main() {
             .subscribe(&mut x)
             .subscribe(&mut y)
             .subscribe(&mut z)
-            .finish()
+            .allocate()
             .unwrap();
 
         let x = x.build();
