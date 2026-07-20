@@ -1,16 +1,10 @@
-#![feature(coroutines)]
-#![feature(stmt_expr_attributes)]
 #![feature(allocator_api)]
 
-use columned::{Guard, GuardedSlice, GuardedSliceBuilder, Subscriber};
-use std::{
-    alloc::{AllocError, Allocator},
-    default,
-    mem::{MaybeUninit, take},
-};
+use columned::{Guard, GuardedSliceBuilder, Subscriber};
+use std::alloc::AllocError;
 
 // The structure-of-array
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct Bodies<'a> {
     //Position
     position: Vec3<'a>,
@@ -21,20 +15,24 @@ struct Bodies<'a> {
 }
 
 impl<'a> Bodies<'a> {
-    fn new(n: usize, subscriber: Subscriber<'a, '_>) -> Result<Bodies<'a>, AllocError> {
-        let mut velocity = Vec3::<'a>::default();
-        let mut mass = GuardedSliceBuilder::new(n);
+    fn new(
+        n: usize,
+        subscriber: Subscriber<'a, '_>,
+        f: impl FnOnce(Subscriber<'a, '_>) -> Result<(), AllocError>,
+    ) -> Result<Bodies<'a>, AllocError> {
+        let mut bodies = Bodies::default();
 
-        let position = Vec3::new(n, subscriber.subscribe(&mut mass), |subscriber| {
-            velocity = Vec3::new(n, subscriber, |subscriber| subscriber.allocate())?;
+        bodies.position = Vec3::new(n, subscriber, |subscriber| {
+            bodies.velocity = Vec3::new(n, subscriber, |subscriber| {
+                let mut mass = GuardedSliceBuilder::new(n);
+                f(subscriber.subscribe(&mut mass))?;
+                bodies.mass = mass.build_default().into_slice();
+                Ok(())
+            })?;
             Ok(())
         })?;
 
-        Ok(Bodies {
-            position,
-            velocity,
-            mass: mass.build_default().into_slice(),
-        })
+        Ok(bodies)
     }
 }
 
@@ -73,7 +71,7 @@ impl<'a> Vec3<'a> {
 fn main() {
     let mut guard = Guard::new();
 
-    let bodies = Bodies::new(5, guard.subscriber()).unwrap();
+    let bodies = Bodies::new(5, guard.subscriber(), |subscriber| subscriber.allocate()).unwrap();
 
     println!("{:#?}", bodies);
 

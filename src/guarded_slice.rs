@@ -145,3 +145,9 @@ impl<'a, T> GuardedSliceBuilder<'a, T> {
         self.build_from_fn(|_| T::default())
     }
 }
+
+impl<'a, T> GuardedSliceBuilder<'a, MaybeUninit<T>> {
+    pub fn build_uninit(self) -> GuardedSlice<'a, MaybeUninit<T>> {
+        unsafe { self.build(|_| ()) }
+    }
+}

@@ -13,7 +13,7 @@ where
 }
 
 fn main() {
-    let mut data = [MaybeUninit::<u64>::uninit(); 1024];
+    let mut data = [MaybeUninit::<u64>::uninit(); 1 << 16];
     let allocator = SingleAllocation::new(&mut data);
     let stdin = std::io::stdin();
     let mut lines = stdin.lock().lines();
@@ -24,10 +24,9 @@ fn main() {
         };
         let mut guard = Guard::new_in(&allocator);
 
-        let mut x: GuardedSliceBuilder<f64, _> = GuardedSliceBuilder::new_with_fn(n, init_random);
-        let mut y: GuardedSliceBuilder<f64, _> = GuardedSliceBuilder::new_with_fn(n, init_random);
-        let mut z: GuardedSliceBuilder<MaybeUninit<f64>, _> =
-            GuardedSliceBuilder::<_, _>::new_uninit(n);
+        let mut x = GuardedSliceBuilder::<f64>::new(n);
+        let mut y = GuardedSliceBuilder::<f64>::new(n);
+        let mut z = GuardedSliceBuilder::<MaybeUninit<f64>>::new(n);
 
         guard
             .subscriber()
@@ -37,9 +36,9 @@ fn main() {
             .allocate()
             .unwrap();
 
-        let x = x.build();
-        let y = y.build();
-        let mut z = z.build();
+        let x = x.build_from_fn(init_random);
+        let y = y.build_from_fn(init_random);
+        let mut z = z.build_uninit();
 
         for i in 0..x.len() {
             z[i].write(x[i] + y[i]);
